@@ -2,4 +2,4 @@
 *.idea
 *.env
 .env
-.github/workflows/publish.yml
+publish.yml
