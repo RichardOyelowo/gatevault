@@ -24,3 +24,4 @@ def verify_password(plain: str, hashed: str) -> bool:
         True if the password matches, False otherwise.
     """
     return bcrypt.checkpw(plain.encode(), hashed.encode())
+
