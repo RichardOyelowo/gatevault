@@ -1,4 +1,5 @@
 import jwt
+import warnings
 from .warnings import ShortKeyWarning
 from datetime import datetime, timezone, timedelta
 from .exceptions import TokenError, TokenExpiredError, InvalidTokenError, TokenDecodeError
