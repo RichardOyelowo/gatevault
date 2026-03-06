@@ -26,14 +26,14 @@ class HashingError(AuthgateError):
     """Base exception for password hashing errors."""
 
 
-class InvalidCredentialsError(HashingError):
-    """Raised when a password does not match the stored hash."""
-
-
 # --- Guard Exceptions ---
 
 class GuardError(AuthgateError):
     """Base exception for auth guard errors."""
+
+
+class InvalidCredentialsError(GuardError):
+    """Raised when a password does not match the stored hash."""
 
 
 class UnauthorizedError(GuardError):
