@@ -12,7 +12,7 @@ def hash_password(plain: str) -> str:
         The bcrypt hashed password as a string.
     """
     try:
-        return bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()
+        return bcrypt.hashpw(plain.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
     except Exception as e:
         raise HashingError("failed to hash password") from e
 
@@ -27,4 +27,4 @@ def verify_password(plain: str, hashed: str) -> bool:
     Returns:
         True if the password matches, False otherwise.
     """
-    return bcrypt.checkpw(plain.encode(), hashed.encode())
+    return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
