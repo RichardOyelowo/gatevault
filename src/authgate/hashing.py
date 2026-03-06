@@ -1,4 +1,5 @@
 import bcrypt
+from .exceptions import HashingError
 
 
 def hash_password(plain: str) -> str:
@@ -10,7 +11,10 @@ def hash_password(plain: str) -> str:
     Returns:
         The bcrypt hashed password as a string.
     """
-    return bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()
+    try:
+        return bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()
+    except Exception as e:
+        raise HashingError("failed to hash password") from e
 
 
 def verify_password(plain: str, hashed: str) -> bool:
@@ -24,4 +28,3 @@ def verify_password(plain: str, hashed: str) -> bool:
         True if the password matches, False otherwise.
     """
     return bcrypt.checkpw(plain.encode(), hashed.encode())
-
