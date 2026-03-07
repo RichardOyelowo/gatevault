@@ -52,7 +52,7 @@ Everything in gatevault is importable from the top level:
 from gatevault import (
     TokenManager,
     OAuthHandler,
-    AuthGate,
+    GateVault,
     hash_password,
     verify_password,
 )
@@ -66,7 +66,7 @@ Before going into each feature, here is what a complete auth setup looks like fr
 
 ```python
 from gatevault import (
-    TokenManager, OAuthHandler, AuthGate,
+    TokenManager, OAuthHandler, GateVault,
     hash_password, verify_password,
     InvalidCredentialsError, UnauthorizedError, TokenExpiredError
 )
@@ -79,7 +79,7 @@ tm = TokenManager(
     refresh_expiry_days=7
 )
 
-gate = AuthGate(token_manager=tm)
+gate = GateVault(token_manager=tm)
 
 def get_user(username):
     return db.get_user_by_email(username)  # your own lookup
@@ -344,14 +344,14 @@ Note: returning the same error message for both `InvalidCredentialsError` and `U
 
 ## Protecting Routes
 
-`AuthGate` is a decorator factory that wraps any function with token verification. The wrapped function never executes if the token is missing, expired, or invalid.
+`GateVault` is a decorator factory that wraps any function with token verification. The wrapped function never executes if the token is missing, expired, or invalid.
 
 ### Setup
 
 ```python
-from gatevault import AuthGate
+from gatevault import GateVault
 
-gate = AuthGate(token_manager=tm)
+gate = GateVault(token_manager=tm)
 ```
 
 ### Basic usage
@@ -511,7 +511,7 @@ gatevault is framework-agnostic but slots naturally into FastAPI and Flask.
 ```python
 import os
 from fastapi import FastAPI, Header, HTTPException
-from gatevault import TokenManager, OAuthHandler, AuthGate, hash_password
+from gatevault import TokenManager, OAuthHandler, GateVault, hash_password
 from gatevault import InvalidCredentialsError, UnauthorizedError, GuardError, TokenExpiredError
 
 app = FastAPI()
@@ -522,7 +522,7 @@ tm = TokenManager(
     refresh_expiry_days=7
 )
 
-gate = AuthGate(token_manager=tm)
+gate = GateVault(token_manager=tm)
 oauth = OAuthHandler(token_manager=tm, get_user=get_user_from_db)
 
 
@@ -573,7 +573,7 @@ def refresh(refresh_token: str):
 ```python
 import os
 from flask import Flask, request, jsonify
-from gatevault import TokenManager, OAuthHandler, AuthGate, hash_password
+from gatevault import TokenManager, OAuthHandler, GateVault, hash_password
 from gatevault import InvalidCredentialsError, UnauthorizedError, GuardError
 
 app = Flask(__name__)
@@ -584,7 +584,7 @@ tm = TokenManager(
     refresh_expiry_days=7
 )
 
-gate = AuthGate(token_manager=tm)
+gate = GateVault(token_manager=tm)
 oauth = OAuthHandler(token_manager=tm, get_user=get_user_from_db)
 
 
@@ -690,7 +690,7 @@ except InvalidTokenError:
 If you already have tokens from your own system and just want decorator-based protection:
 
 ```python
-from gatevault import TokenManager, AuthGate
+from gatevault import TokenManager, GateVault
 from gatevault import GuardError, UnauthorizedError
 
 tm = TokenManager(
@@ -698,7 +698,7 @@ tm = TokenManager(
     access_expiry_minutes=15,
     refresh_expiry_days=7
 )
-gate = AuthGate(token_manager=tm)
+gate = GateVault(token_manager=tm)
 
 @gate.protected
 def sensitive_action(data: dict, payload=None):
@@ -816,7 +816,7 @@ When a login fails, return the same error message whether the username does not 
 
 ---
 
-### `AuthGate(token_manager)`
+### `GateVault(token_manager)`
 
 | Parameter | Type | Description |
 |---|---|---|
@@ -877,7 +877,7 @@ A wrong password is an expected outcome, not an exceptional one. The caller deci
 
 - Refresh token invalidation is not handled by gatevault — you need a database or cache to track and revoke issued refresh tokens
 - Only HS256 (symmetric) signing is supported — RS256 (asymmetric keypair) is not yet available
-- `AuthGate.protected` expects the token as a keyword argument — you may need a thin adapter in frameworks that inject request objects differently
+- `GateVault.protected` expects the token as a keyword argument — you may need a thin adapter in frameworks that inject request objects differently
 - No built-in rate limiting on login attempts — implement this at the application or infrastructure level
 
 ---
@@ -887,7 +887,7 @@ A wrong password is an expected outcome, not an exceptional one. The caller deci
 - RS256 support for asymmetric key signing
 - Built-in token blocklist interface for revocation
 - Async-compatible versions of all methods
-- Role-based access control helpers on `AuthGate`
+- Role-based access control helpers on `GateVault`
 - FastAPI and Flask integration packages
 
 ---

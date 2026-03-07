@@ -1,4 +1,4 @@
-from .guards import AuthGate
+from .guards import GateVault
 from .oauth2 import OAuthHandler
 from .tokens import TokenManager
 from .warnings import ShortKeyWarning
@@ -10,7 +10,7 @@ from .exceptions import (
 )
 
 __all__ = [
-    "AuthGate",
+    "GateVault",
     "OAuthHandler", 
     "TokenManager",
     "hash_password",

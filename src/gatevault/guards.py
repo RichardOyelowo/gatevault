@@ -4,10 +4,10 @@ from .exceptions import GuardError, UnauthorizedError, TokenDecodeError, TokenEx
 
 
 
-class AuthGate:
+class GateVault:
     """Protects routes and functions by verifying JWT tokens before execution.
 
-    AuthGate acts as a decorator factory — wrapping any function with token
+    GateVault acts as a decorator factory — wrapping any function with token
     verification logic so protected routes never execute without a valid token.
     The decoded payload is injected into the wrapped function as a ``payload``
     keyword argument.
@@ -19,7 +19,7 @@ class AuthGate:
     Example::
 
         tm = TokenManager(secret_key="...", access_expiry_minutes=15, refresh_expiry_days=7)
-        gate = AuthGate(token_manager=tm)
+        gate = GateVault(token_manager=tm)
 
         @gate.protected
         def get_profile(payload=None):
