@@ -1,10 +1,10 @@
-class AuthgateError(Exception):
-    """Base exception for all authgate errors."""
+class GatevaultError(Exception):
+    """Base exception for all gatevault errors."""
 
 
 # --- Token Exceptions ---
 
-class TokenError(AuthgateError):
+class TokenError(GatevaultError):
     """Base exception for JWT-related errors."""
 
 
@@ -22,13 +22,13 @@ class TokenDecodeError(TokenError):
 
 # --- Hashing Exceptions ---
 
-class HashingError(AuthgateError):
+class HashingError(GatevaultError):
     """Base exception for password hashing errors."""
 
 
 # --- Guard Exceptions ---
 
-class GuardError(AuthgateError):
+class GuardError(GatevaultError):
     """Base exception for auth guard errors."""
 
 

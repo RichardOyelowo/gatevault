@@ -6,7 +6,7 @@ from .hashing import hash_password, verify_password
 from .exceptions import (
         TokenError, TokenExpiredError, InvalidTokenError, TokenDecodeError, 
         GuardError, InvalidCredentialsError, UnauthorizedError, 
-        AuthgateError, HashingError
+        GatevaultError, HashingError
 )
 
 __all__ = [
@@ -16,7 +16,7 @@ __all__ = [
     "hash_password",
     "verify_password",
     "ShortKeyWarning",
-    "AuthgateError",
+    "GatevaultError",
     "TokenError",
     "TokenExpiredError",
     "InvalidTokenError",
