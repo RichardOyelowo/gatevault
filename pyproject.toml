@@ -13,5 +13,5 @@ license = {text = "Apache-2.0"}
 authors = [{name = "Richard Oyelowo"}]
 
 [project.urls]
-Homepage = "https://github.com/RichardOyelowo/authgate"
-Repository = "https://github.com/RichardOyelowo/authgate"
+Homepage = "https://github.com/RichardOyelowo/gatevault"
+Repository = "https://github.com/RichardOyelowo/gatevault"
