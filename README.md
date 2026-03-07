@@ -1,11 +1,11 @@
-# authgate
+# gatevault
 
 A Python auth library that handles JWT token management, password hashing, OAuth2 login flow, and route protection — so you don't have to wire it together yourself.
 
-Most auth libraries do one thing. `PyJWT` gives you JWT encoding. `bcrypt` gives you password hashing. You still have to write the login flow, build the guards, handle the exceptions, and repeat that boilerplate across every project. authgate wraps all of it into one coherent package with a clean API you can drop into any Python project regardless of framework.
+Most auth libraries do one thing. `PyJWT` gives you JWT encoding. `bcrypt` gives you password hashing. You still have to write the login flow, build the guards, handle the exceptions, and repeat that boilerplate across every project. gatevault wraps all of it into one coherent package with a clean API you can drop into any Python project regardless of framework.
 
 ```bash
-pip install authgate
+pip install gatevault
 ```
 
 ---
@@ -23,7 +23,7 @@ pip install authgate
 - [Framework Integration](#framework-integration)
   - [FastAPI](#fastapi)
   - [Flask](#flask)
-- [Using authgate in Parts](#using-authgate-in-parts)
+- [Using gatevault in Parts](#using-gatevault-in-parts)
   - [Just Hashing](#just-hashing)
   - [Just Tokens](#just-tokens)
   - [Just Guards](#just-guards)
@@ -41,15 +41,15 @@ pip install authgate
 ## Installation
 
 ```bash
-pip install authgate
+pip install gatevault
 ```
 
 Requires Python 3.9+. Dependencies `PyJWT` and `bcrypt` are installed automatically.
 
-Everything in authgate is importable from the top level:
+Everything in gatevault is importable from the top level:
 
 ```python
-from authgate import (
+from gatevault import (
     TokenManager,
     OAuthHandler,
     AuthGate,
@@ -65,7 +65,7 @@ from authgate import (
 Before going into each feature, here is what a complete auth setup looks like from registration to protected route access. If you only need one specific feature, jump to the relevant section.
 
 ```python
-from authgate import (
+from gatevault import (
     TokenManager, OAuthHandler, AuthGate,
     hash_password, verify_password,
     InvalidCredentialsError, UnauthorizedError, TokenExpiredError
@@ -124,12 +124,12 @@ profile = get_profile(token=tokens["access_token"])
 
 ## Password Hashing
 
-authgate uses bcrypt for password hashing. Passwords are one-way hashed — there is no way to reverse a hash back to the original password. This is intentional. If your database is ever compromised, attackers get hashes, not passwords.
+gatevault uses bcrypt for password hashing. Passwords are one-way hashed — there is no way to reverse a hash back to the original password. This is intentional. If your database is ever compromised, attackers get hashes, not passwords.
 
 ### Hashing a password
 
 ```python
-from authgate import hash_password
+from gatevault import hash_password
 
 hashed = hash_password("user_plain_password")
 print(hashed)
@@ -148,7 +148,7 @@ def create_account(username, plain_password):
 ### Verifying a password
 
 ```python
-from authgate import verify_password
+from gatevault import verify_password
 
 is_match = verify_password("user_plain_password", stored_hash)
 # True or False
@@ -183,12 +183,12 @@ print(verify_password("same_password", h2))  # True
 
 ## Token Management
 
-`TokenManager` handles all JWT creation and verification. It is the core of authgate. Create one instance at startup and share it across your app.
+`TokenManager` handles all JWT creation and verification. It is the core of gatevault. Create one instance at startup and share it across your app.
 
 ### Setup
 
 ```python
-from authgate import TokenManager
+from gatevault import TokenManager
 
 tm = TokenManager(
     secret_key="your-very-secure-secret-key-minimum-32-bytes",
@@ -201,7 +201,7 @@ The `secret_key` is what signs your tokens. Anyone with this key can create vali
 
 ```python
 import os
-from authgate import TokenManager
+from gatevault import TokenManager
 
 tm = TokenManager(
     secret_key=os.environ["AUTH_SECRET_KEY"],
@@ -244,7 +244,7 @@ token_type = payload["type"]  # "access" or "refresh"
 `decode_token` verifies the signature and checks expiry automatically. It raises specific exceptions on failure rather than returning `None` or a status code — so you know exactly what went wrong.
 
 ```python
-from authgate import TokenExpiredError, InvalidTokenError, TokenDecodeError
+from gatevault import TokenExpiredError, InvalidTokenError, TokenDecodeError
 
 try:
     payload = tm.decode_token(token)
@@ -281,7 +281,7 @@ This prevents someone from using a refresh token where an access token is expect
 ### Setup
 
 ```python
-from authgate import OAuthHandler
+from gatevault import OAuthHandler
 
 def get_user(username: str):
     # return a user object with `id` and `hashed_password` attributes
@@ -326,7 +326,7 @@ print(tokens)
 ### Handling login errors
 
 ```python
-from authgate import InvalidCredentialsError, UnauthorizedError, GuardError
+from gatevault import InvalidCredentialsError, UnauthorizedError, GuardError
 
 try:
     tokens = oauth.login(username, password)
@@ -349,7 +349,7 @@ Note: returning the same error message for both `InvalidCredentialsError` and `U
 ### Setup
 
 ```python
-from authgate import AuthGate
+from gatevault import AuthGate
 
 gate = AuthGate(token_manager=tm)
 ```
@@ -399,7 +399,7 @@ get_post(post_id=7, token="eyJhbGci...")
 ### Handling guard errors
 
 ```python
-from authgate import GuardError, UnauthorizedError
+from gatevault import GuardError, UnauthorizedError
 
 try:
     result = get_profile(token=incoming_token)
@@ -413,10 +413,10 @@ except UnauthorizedError as e:
 
 ## Exception Handling
 
-All authgate exceptions inherit from `AuthgateError`. You can catch at any level of the hierarchy depending on how granular your error handling needs to be.
+All gatevault exceptions inherit from `GatevaultError`. You can catch at any level of the hierarchy depending on how granular your error handling needs to be.
 
 ```
-AuthgateError
+GatevaultError
 ├── TokenError
 │   ├── TokenExpiredError
 │   ├── InvalidTokenError
@@ -430,8 +430,8 @@ AuthgateError
 ### Importing exceptions
 
 ```python
-from authgate import (
-    AuthgateError,
+from gatevault import (
+    GatevaultError,
     TokenError,
     TokenExpiredError,
     InvalidTokenError,
@@ -448,7 +448,7 @@ from authgate import (
 ```python
 try:
     tokens = oauth.login(username, password)
-except AuthgateError as e:
+except GatevaultError as e:
     return {"error": str(e)}, 401
 ```
 
@@ -485,7 +485,7 @@ Issued at `TokenManager` creation if the secret key is shorter than 32 bytes. HS
 
 ```python
 import warnings
-from authgate import ShortKeyWarning
+from gatevault import ShortKeyWarning
 
 # suppress in tests
 warnings.filterwarnings("ignore", category=ShortKeyWarning)
@@ -504,15 +504,15 @@ python -c "import secrets; print(secrets.token_hex(32))"
 
 ## Framework Integration
 
-authgate is framework-agnostic but slots naturally into FastAPI and Flask.
+gatevault is framework-agnostic but slots naturally into FastAPI and Flask.
 
 ### FastAPI
 
 ```python
 import os
 from fastapi import FastAPI, Header, HTTPException
-from authgate import TokenManager, OAuthHandler, AuthGate, hash_password
-from authgate import InvalidCredentialsError, UnauthorizedError, GuardError, TokenExpiredError
+from gatevault import TokenManager, OAuthHandler, AuthGate, hash_password
+from gatevault import InvalidCredentialsError, UnauthorizedError, GuardError, TokenExpiredError
 
 app = FastAPI()
 
@@ -573,8 +573,8 @@ def refresh(refresh_token: str):
 ```python
 import os
 from flask import Flask, request, jsonify
-from authgate import TokenManager, OAuthHandler, AuthGate, hash_password
-from authgate import InvalidCredentialsError, UnauthorizedError, GuardError
+from gatevault import TokenManager, OAuthHandler, AuthGate, hash_password
+from gatevault import InvalidCredentialsError, UnauthorizedError, GuardError
 
 app = Flask(__name__)
 
@@ -627,7 +627,7 @@ def profile():
 
 ---
 
-## Using authgate in Parts
+## Using gatevault in Parts
 
 You do not have to use the whole package. Each part is independent and works on its own.
 
@@ -636,7 +636,7 @@ You do not have to use the whole package. Each part is independent and works on 
 No tokens, no guards — just password hashing and verification:
 
 ```python
-from authgate import hash_password, verify_password
+from gatevault import hash_password, verify_password
 
 # at registration
 hashed = hash_password("user_password")
@@ -657,8 +657,8 @@ No other setup needed. `hash_password` and `verify_password` are standalone func
 If you have your own login and auth flow and only want JWT management:
 
 ```python
-from authgate import TokenManager
-from authgate import TokenExpiredError, InvalidTokenError, TokenDecodeError
+from gatevault import TokenManager
+from gatevault import TokenExpiredError, InvalidTokenError, TokenDecodeError
 
 tm = TokenManager(
     secret_key="your-secret",
@@ -690,8 +690,8 @@ except InvalidTokenError:
 If you already have tokens from your own system and just want decorator-based protection:
 
 ```python
-from authgate import TokenManager, AuthGate
-from authgate import GuardError, UnauthorizedError
+from gatevault import TokenManager, AuthGate
+from gatevault import GuardError, UnauthorizedError
 
 tm = TokenManager(
     secret_key="your-secret",
@@ -715,12 +715,12 @@ except (GuardError, UnauthorizedError):
 
 ## Token Refresh & Rotation
 
-authgate creates new tokens on demand but does not manage token storage or invalidation — that lives in your application. Here is the recommended pattern:
+gatevault creates new tokens on demand but does not manage token storage or invalidation — that lives in your application. Here is the recommended pattern:
 
 ### The refresh flow
 
 ```python
-from authgate import TokenExpiredError, InvalidTokenError, TokenDecodeError
+from gatevault import TokenExpiredError, InvalidTokenError, TokenDecodeError
 
 def refresh_tokens(refresh_token: str):
     try:
@@ -761,7 +761,7 @@ Without rotation, a stolen refresh token is valid until it expires — potential
 
 ### Secret key
 
-- Use at least 32 bytes — authgate will warn you if you don't
+- Use at least 32 bytes — gatevault will warn you if you don't
 - Generate with `python -c "import secrets; print(secrets.token_hex(32))"`
 - Never hardcode it — use environment variables
 - Rotate it only when necessary — rotation invalidates all existing tokens immediately
@@ -853,7 +853,7 @@ Returns `True` if the password matches, `False` otherwise. Never raises on a wro
 
 **Framework-agnostic**
 
-Tying authgate to FastAPI or Flask would limit who can use it. The core auth logic — hashing, signing, verifying — has nothing to do with HTTP. Keeping it pure Python means it works anywhere and framework-specific integrations can be layered on top.
+Tying gatevault to FastAPI or Flask would limit who can use it. The core auth logic — hashing, signing, verifying — has nothing to do with HTTP. Keeping it pure Python means it works anywhere and framework-specific integrations can be layered on top.
 
 **Class-based `TokenManager` instead of functions**
 
@@ -865,7 +865,7 @@ The secret key and expiry settings are configuration — they belong on an insta
 
 **Wrapping third-party exceptions**
 
-`PyJWT` and `bcrypt` exceptions never leak through the authgate API. Consumers only need to know authgate exceptions. If an underlying library changes its exception names in a future version, only authgate updates — not every app built on it.
+`PyJWT` and `bcrypt` exceptions never leak through the gatevault API. Consumers only need to know gatevault exceptions. If an underlying library changes its exception names in a future version, only gatevault updates — not every app built on it.
 
 **`verify_password` returns bool, not raises**
 
@@ -875,7 +875,7 @@ A wrong password is an expected outcome, not an exceptional one. The caller deci
 
 ## Known Limitations
 
-- Refresh token invalidation is not handled by authgate — you need a database or cache to track and revoke issued refresh tokens
+- Refresh token invalidation is not handled by gatevault — you need a database or cache to track and revoke issued refresh tokens
 - Only HS256 (symmetric) signing is supported — RS256 (asymmetric keypair) is not yet available
 - `AuthGate.protected` expects the token as a keyword argument — you may need a thin adapter in frameworks that inject request objects differently
 - No built-in rate limiting on login attempts — implement this at the application or infrastructure level
@@ -897,8 +897,8 @@ A wrong password is an expected outcome, not an exceptional one. The caller deci
 Contributions are welcome. Open an issue first to discuss what you want to change, especially for anything touching the security-sensitive parts.
 
 ```bash
-git clone https://github.com/RichardOyelowo/authgate
-cd authgate
+git clone https://github.com/RichardOyelowo/gatevault
+cd gatevault
 pip install -e ".[dev]"
 pytest
 ```
