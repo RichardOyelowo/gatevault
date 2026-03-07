@@ -1,10 +1,7 @@
 from functools import wraps
 from .tokens import TokenManager
-from .exceptions import (
-    GuardError, InvalidCredentialsError,
-    UnauthorizedError, TokenDecodeError, TokenExpiredError,
-    InvalidTokenError
-)
+from .exceptions import GuardError, UnauthorizedError, TokenDecodeError, TokenExpiredError, InvalidTokenError
+
 
 
 class AuthGate:
