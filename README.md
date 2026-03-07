@@ -1,4 +1,4 @@
-# gatevault
+# <img src="images/brown_logo.svg">
 
 A Python auth library that handles JWT token management, password hashing, OAuth2 login flow, and route protection — so you don't have to wire it together yourself.
 
