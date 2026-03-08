@@ -1,4 +1,4 @@
-# <img src="images/brown_logo.svg">
+# <img src="images/white_logo.png">
 
 A Python auth library that handles JWT token management, password hashing, OAuth2 login flow, and route protection — so you don't have to wire it together yourself.
 
@@ -41,7 +41,7 @@ pip install richard-gatevault
 ## Installation
 
 ```bash
-pip install gatevault
+pip install richard-gatevault
 ```
 
 Requires Python 3.9+. Dependencies `PyJWT` and `bcrypt` are installed automatically.
