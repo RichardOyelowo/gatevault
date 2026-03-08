@@ -129,6 +129,8 @@ class TokenManager:
         """
         try:
             payload = jwt.decode(token, self.secret_key, algorithms=["HS256"])
+        except jwt.exceptions.InvalidSignatureError:
+            raise InvalidTokenError
         except jwt.DecodeError:
             raise TokenDecodeError
         except jwt.ExpiredSignatureError:
