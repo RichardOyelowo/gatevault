@@ -3,7 +3,7 @@ from gatevault.exceptions import TokenDecodeError, TokenExpiredError, InvalidTok
 from gatevault.tokens import TokenManager
 
 
-tm = TokenManager("very-secret-key", 15, 7)
+tm = TokenManager("very-secret-key-preffered-to-be-up-to-32bytes", 15, 7)
 
 def test_create_access_token():
     token = tm.create_access_token(10)
@@ -45,7 +45,7 @@ def test_token_decode_error():
 
 
 def test_token_expired_error():
-    ta = TokenManager("very-secret-key", 0, 0)
+    ta = TokenManager("very-secret-key-up-to-32bytes-for-security", 0, 0)
     token = ta.create_access_token(10)
 
     with pytest.raises(TokenExpiredError):
