@@ -1,4 +1,3 @@
-import pytest
 from src.gatevault.hashing import hash_password, verify_password
 
 
