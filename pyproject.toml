@@ -7,13 +7,23 @@ packages = ["src/gatevault"]
 
 [project]
 name = "richard-gatevault"
-version = "1.0.1"
+version = "1.0.2"
 description = "A Python auth library that handles JWT token management, password hashing, OAuth2 login flow, and route protection — so you don't have to wire it together yourself."
 requires-python = ">=3.9"
 dependencies = ["PyJWT", "bcrypt"]
 readme = "README.md"
 license = {text = "Apache-2.0"}
 authors = [{name = "Richard Oyelowo"}]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: Apache Software License",
+    "Intended Audience :: Developers",
+    "Topic :: Security",
+]
 
 [project.urls]
 Homepage = "https://github.com/RichardOyelowo/gatevault"
