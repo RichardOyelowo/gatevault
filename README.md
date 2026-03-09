@@ -1,4 +1,14 @@
-# <img src="images/white_logo.png">
+# <img src="https://raw.githubusercontent.com/RichardOyelowo/gatevault/main/images/white_logo.png">
+
+<p align="center">
+  <a href="https://pypi.org/project/richard-gatevault/"><img src="https://img.shields.io/pypi/v/richard-gatevault?color=8B4513&label=pypi&style=flat-square"></a>
+  <a href="https://pypi.org/project/richard-gatevault/"><img src="https://img.shields.io/pypi/pyversions/richard-gatevault?color=3776AB&style=flat-square"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-orange?style=flat-square"></a>
+  <a href="https://github.com/RichardOyelowo/gatevault/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/RichardOyelowo/gatevault/ci.yml?label=CI&style=flat-square"></a>
+  <a href="https://linkedin.com/in/richard-oyelowo"><img src="https://img.shields.io/badge/LinkedIn-Richard%20Oyelowo-0077B5?logo=linkedin&style=flat-square"></a>
+</p>
+
+---
 
 A Python auth library that handles JWT token management, password hashing, OAuth2 login flow, and route protection — so you don't have to wire it together yourself.
 
