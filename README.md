@@ -62,69 +62,137 @@ from gatevault import (
 
 ## The Full Picture
 
-Before going into each feature, here is what a complete auth setup looks like from registration to protected route access. If you only need one specific feature, jump to the relevant section.
+Here is what a complete auth setup looks like end to end — registration, login, token storage, protected routes, and token refresh. If you only need one specific feature, jump to the relevant section.
 
 ```python
+import os
 from gatevault import (
     TokenManager, OAuthHandler, GateVault,
     hash_password, verify_password,
-    InvalidCredentialsError, UnauthorizedError, TokenExpiredError
+    InvalidCredentialsError, UnauthorizedError,
+    TokenExpiredError, GuardError
 )
 
-# --- Setup (once at app startup) ---
+# ---------------------------------------------------------------------------
+# Setup — do this once at app startup
+# ---------------------------------------------------------------------------
 
 tm = TokenManager(
-    secret_key="your-very-secure-secret-key-minimum-32-bytes",
+    secret_key=os.environ["AUTH_SECRET_KEY"],
     access_expiry_minutes=15,
     refresh_expiry_days=7
 )
 
 gate = GateVault(token_manager=tm)
-
-def get_user(username):
-    return db.get_user_by_email(username)  # your own lookup
-
-oauth = OAuthHandler(token_manager=tm, get_user=get_user)
+oauth = OAuthHandler(token_manager=tm, get_user=get_user_from_db)
 
 
-# --- Registration ---
+# ---------------------------------------------------------------------------
+# Registration — hash and store the password
+# ---------------------------------------------------------------------------
 
-def register(username, plain_password):
+def register(username: str, plain_password: str):
     hashed = hash_password(plain_password)
     db.create_user(username=username, hashed_password=hashed)
+    return {"message": "registered"}
 
 
-# --- Login ---
+# ---------------------------------------------------------------------------
+# Login — returns access token in body, refresh token goes in httpOnly cookie
+#
+# The client stores the access token in memory (a JS variable).
+# The refresh token is stored in an httpOnly cookie — it cannot be read
+# by JavaScript, which reduces XSS exposure.
+# ---------------------------------------------------------------------------
 
-def login(username, password):
+def login(username: str, password: str):
     try:
-        return oauth.login(username, password)
-        # {"access_token": "...", "refresh_token": "...", "token_type": "bearer"}
-    except InvalidCredentialsError:
-        return 404, "user not found"
-    except UnauthorizedError:
-        return 401, "wrong password"
+        tokens = oauth.login(username, password)
+    except (InvalidCredentialsError, UnauthorizedError):
+        return {"error": "invalid credentials"}, 401
+
+    # In a real app, set the refresh token as an httpOnly cookie:
+    # response.set_cookie("refresh_token", tokens["refresh_token"], httponly=True)
+    #
+    # Return only the access token in the response body:
+    return {"access_token": tokens["access_token"]}
 
 
-# --- Protected route ---
+# ---------------------------------------------------------------------------
+# Protected functions — decorated once, reused across many routes
+# ---------------------------------------------------------------------------
 
 @gate.protected
 def get_profile(payload=None):
     user_id = payload["user_id"]
     return db.get_user(user_id)
 
+@gate.protected
+def get_orders(payload=None):
+    user_id = payload["user_id"]
+    return db.get_orders(user_id)
 
-# --- Calling a protected route ---
+@gate.protected
+def update_settings(settings: dict, payload=None):
+    user_id = payload["user_id"]
+    return db.update_settings(user_id, settings)
 
-tokens = login("john@example.com", "password123")
-profile = get_profile(token=tokens["access_token"])
+
+# ---------------------------------------------------------------------------
+# Routes — the framework extracts the token from the Authorization header
+# and passes it to the protected function
+#
+# Client sends: Authorization: Bearer <access_token>
+# ---------------------------------------------------------------------------
+
+def profile_route(authorization_header: str):
+    token = authorization_header.replace("Bearer ", "")
+    try:
+        return get_profile(token=token)
+    except (GuardError, UnauthorizedError):
+        return {"error": "unauthorized"}, 401
+
+def orders_route(authorization_header: str):
+    token = authorization_header.replace("Bearer ", "")
+    try:
+        return get_orders(token=token)
+    except (GuardError, UnauthorizedError):
+        return {"error": "unauthorized"}, 401
+
+
+# ---------------------------------------------------------------------------
+# Token refresh — client sends the refresh token (from cookie)
+# Server issues a new access token and rotates the refresh token
+# ---------------------------------------------------------------------------
+
+def refresh_route(refresh_token: str):
+    try:
+        payload = tm.decode_token(refresh_token)
+    except TokenExpiredError:
+        return {"error": "session expired, please log in again"}, 401
+    except (GuardError, UnauthorizedError):
+        return {"error": "invalid token"}, 401
+
+    if payload["type"] != "refresh":
+        return {"error": "wrong token type"}, 400
+
+    # Invalidate old refresh token in your DB before issuing a new one
+    db.revoke_refresh_token(refresh_token)
+
+    new_access = tm.create_access_token(user_id=payload["user_id"])
+    new_refresh = tm.create_refresh_token(user_id=payload["user_id"])
+
+    db.store_refresh_token(new_refresh, user_id=payload["user_id"])
+
+    # set new_refresh as httpOnly cookie in a real app
+    return {"access_token": new_access}
 ```
 
 ---
 
 ## Password Hashing
 
-gatevault uses bcrypt for password hashing. Passwords are one-way hashed — there is no way to reverse a hash back to the original password. This is intentional. If your database is ever compromised, attackers get hashes, not passwords.
+gatevault uses bcrypt for password hashing. Passwords are one-way hashed — there is no way to reverse a hash back to the original password. If your database is ever compromised, attackers get hashes, not passwords.
 
 ### Hashing a password
 
@@ -139,10 +207,10 @@ print(hashed)
 Always hash at the point of registration and store the result. Never store or log the plain password.
 
 ```python
-# At registration
-def create_account(username, plain_password):
+def register(username: str, plain_password: str):
     hashed = hash_password(plain_password)
-    db.insert(username=username, password=hashed)
+    db.insert(username=username, hashed_password=hashed)
+    return {"message": "account created"}
 ```
 
 ### Verifying a password
@@ -157,8 +225,9 @@ is_match = verify_password("user_plain_password", stored_hash)
 `verify_password` returns a boolean. It never raises on a wrong password — it just returns `False`. What you do with that result is your decision.
 
 ```python
-# At login
-def authenticate(username, plain_password):
+from gatevault import verify_password, InvalidCredentialsError, UnauthorizedError
+
+def authenticate(username: str, plain_password: str):
     user = db.get_user(username)
     if not user:
         raise InvalidCredentialsError("user not found")
@@ -169,14 +238,33 @@ def authenticate(username, plain_password):
 
 ### About bcrypt salting
 
-You do not need to manage salts yourself. bcrypt generates a unique random salt for every hash and embeds it in the output string. Two calls to `hash_password` with the same password produce different hashes — both are valid. `verify_password` extracts the salt automatically from the stored hash during verification.
+You do not need to manage salts yourself. bcrypt generates a unique random salt for every hash and embeds it in the output string. Two calls to `hash_password` with the same password produce different hashes — both are valid.
 
 ```python
 h1 = hash_password("same_password")
 h2 = hash_password("same_password")
-print(h1 == h2)  # False — different salts, both valid
-print(verify_password("same_password", h1))  # True
-print(verify_password("same_password", h2))  # True
+
+print(h1 == h2)                            # False — different salts
+print(verify_password("same_password", h1)) # True
+print(verify_password("same_password", h2)) # True
+print(verify_password("wrong", h1))         # False
+```
+
+### Standalone usage
+
+`hash_password` and `verify_password` have no dependency on the rest of gatevault. You can use them without setting up `TokenManager` or anything else:
+
+```python
+from gatevault import hash_password, verify_password
+
+# registration
+stored = hash_password("mypassword")
+
+# login check
+if verify_password("mypassword", stored):
+    print("access granted")
+else:
+    print("access denied")
 ```
 
 ---
@@ -188,26 +276,22 @@ print(verify_password("same_password", h2))  # True
 ### Setup
 
 ```python
-from gatevault import TokenManager
-
-tm = TokenManager(
-    secret_key="your-very-secure-secret-key-minimum-32-bytes",
-    access_expiry_minutes=15,
-    refresh_expiry_days=7
-)
-```
-
-The `secret_key` is what signs your tokens. Anyone with this key can create valid tokens, so keep it secret and never commit it to source control. Use an environment variable:
-
-```python
 import os
 from gatevault import TokenManager
 
 tm = TokenManager(
     secret_key=os.environ["AUTH_SECRET_KEY"],
-    access_expiry_minutes=int(os.environ.get("ACCESS_EXPIRY_MINUTES", 15)),
-    refresh_expiry_days=int(os.environ.get("REFRESH_EXPIRY_DAYS", 7))
+    access_expiry_minutes=15,
+    refresh_expiry_days=7
 )
+```
+
+The `secret_key` is what signs your tokens. Anyone with this key can forge valid tokens — keep it in an environment variable, never in source code.
+
+To generate a secure key:
+
+```bash
+python -c "import secrets; print(secrets.token_hex(32))"
 ```
 
 ### Creating tokens
@@ -215,33 +299,53 @@ tm = TokenManager(
 ```python
 access_token = tm.create_access_token(user_id=42)
 refresh_token = tm.create_refresh_token(user_id=42)
+
+print(access_token)
+# eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 ```
 
-Both methods return a JWT string. Access tokens are short-lived — meant to be sent with every authenticated request. Refresh tokens are long-lived — used only to obtain a new access token when the current one expires.
+Access tokens are short-lived — meant to be sent with every authenticated request. Refresh tokens are long-lived — used only to get a new access token when the current one expires.
 
 ### Extra claims
 
 You can embed additional data in the token payload using keyword arguments:
 
 ```python
-token = tm.create_access_token(user_id=42, role="admin", org_id=7)
+# embed role and org at login time
+access_token = tm.create_access_token(user_id=42, role="admin", org_id=7)
 
-payload = tm.decode_token(token)
+payload = tm.decode_token(access_token)
 print(payload)
-# {"user_id": 42, "exp": 1234567890, "type": "access", "role": "admin", "org_id": 7}
+# {
+#   "user_id": 42,
+#   "exp": 1234567890,
+#   "type": "access",
+#   "role": "admin",
+#   "org_id": 7
+# }
 ```
 
-This is useful for embedding role or permission data so your guards can make access decisions without hitting the database on every request.
+This means your guards can make role-based decisions without hitting the database on every request:
+
+```python
+@gate.protected
+def admin_dashboard(payload=None):
+    if payload.get("role") != "admin":
+        raise UnauthorizedError("admin access required")
+    return get_admin_data()
+```
 
 ### Decoding tokens
 
 ```python
 payload = tm.decode_token(token)
+
 user_id = payload["user_id"]
-token_type = payload["type"]  # "access" or "refresh"
+token_type = payload["type"]   # "access" or "refresh"
+expiry = payload["exp"]        # unix timestamp
 ```
 
-`decode_token` verifies the signature and checks expiry automatically. It raises specific exceptions on failure rather than returning `None` or a status code — so you know exactly what went wrong.
+`decode_token` verifies the signature and checks expiry in one call. It raises specific exceptions on failure:
 
 ```python
 from gatevault import TokenExpiredError, InvalidTokenError, TokenDecodeError
@@ -249,28 +353,47 @@ from gatevault import TokenExpiredError, InvalidTokenError, TokenDecodeError
 try:
     payload = tm.decode_token(token)
 except TokenExpiredError:
-    # send the client to the refresh endpoint
-    pass
+    # token has passed its exp time — send client to refresh endpoint
+    return {"error": "token expired"}, 401
 except InvalidTokenError:
-    # signature mismatch — possible tampering
-    pass
+    # signature mismatch — token was tampered with
+    return {"error": "invalid token"}, 401
 except TokenDecodeError:
-    # malformed token string
-    pass
+    # token string is malformed — can't be parsed
+    return {"error": "malformed token"}, 400
 ```
 
-### Access vs refresh — tell them apart
+### Access vs refresh — telling them apart
 
-Every token has a `type` claim embedded in the payload. Check it if you need to enforce which kind of token is being used:
+Every token carries a `type` claim. Check it when you need to enforce which kind of token is being used:
 
 ```python
 payload = tm.decode_token(token)
 
 if payload["type"] != "access":
-    raise UnauthorizedError("expected an access token")
+    raise UnauthorizedError("expected an access token, got refresh")
 ```
 
-This prevents someone from using a refresh token where an access token is expected.
+This matters on your refresh endpoint — you only want refresh tokens there, not access tokens:
+
+```python
+def refresh_route(token: str):
+    payload = tm.decode_token(token)
+    if payload["type"] != "refresh":
+        return {"error": "wrong token type"}, 400
+    # proceed with issuing new tokens
+```
+
+### TokenManager is shared
+
+`OAuthHandler` creates tokens using `TokenManager`. `GateVault` verifies tokens using the **same** `TokenManager`. They share the same secret key. Create one instance and pass it to both:
+
+```python
+tm = TokenManager(secret_key=os.environ["AUTH_SECRET_KEY"], access_expiry_minutes=15, refresh_expiry_days=7)
+
+oauth = OAuthHandler(token_manager=tm, get_user=get_user)  # uses tm to create tokens
+gate = GateVault(token_manager=tm)                          # uses tm to verify tokens
+```
 
 ---
 
@@ -285,31 +408,37 @@ from gatevault import OAuthHandler
 
 def get_user(username: str):
     # return a user object with `id` and `hashed_password` attributes
-    # return None if user does not exist
+    # return None if the user doesn't exist
     return db.query(User).filter(User.email == username).first()
 
 oauth = OAuthHandler(token_manager=tm, get_user=get_user)
 ```
 
 Your `get_user` function must return an object with two attributes:
-- `id` — the user's identifier, passed into the token payload
+
+- `id` — the user's identifier, embedded in the token payload
 - `hashed_password` — the bcrypt hash stored at registration
 
 If your model uses different field names, add a property:
 
 ```python
-class User:
-    # your model fields...
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True)
+    email = Column(String)
+    password_hash = Column(String)  # your field is called password_hash
 
     @property
     def hashed_password(self):
-        return self.password_hash  # whatever your field is called
+        return self.password_hash   # gatevault expects hashed_password
 ```
 
-### Logging in
+### What login does
 
 ```python
 tokens = oauth.login("john@example.com", "their_password")
+
 print(tokens)
 # {
 #     "access_token": "eyJhbGci...",
@@ -319,9 +448,41 @@ print(tokens)
 ```
 
 `login` does three things in order:
-1. Calls `get_user(username)` — raises `InvalidCredentialsError` if it returns `None`
-2. Calls `verify_password` — raises `UnauthorizedError` if the password does not match
-3. Creates and returns both tokens
+
+1. Calls `get_user(username)` — raises `InvalidCredentialsError` if `None` is returned
+2. Calls `verify_password(password, user.hashed_password)` — raises `UnauthorizedError` if it returns `False`
+3. Calls `create_access_token` and `create_refresh_token` — raises `GuardError` if token creation fails
+
+### What to do with the tokens
+
+The access token goes back to the client in the response body. The refresh token should be set as an httpOnly cookie — it cannot be read by JavaScript:
+
+```python
+# pseudocode — adjust to your framework
+def login_route(username, password, response):
+    try:
+        tokens = oauth.login(username, password)
+    except (InvalidCredentialsError, UnauthorizedError):
+        return {"error": "invalid credentials"}, 401
+
+    # refresh token goes in a secure httpOnly cookie
+    response.set_cookie(
+        key="refresh_token",
+        value=tokens["refresh_token"],
+        httponly=True,
+        secure=True,      # HTTPS only
+        samesite="strict"
+    )
+
+    # access token goes in the response body — client stores in memory
+    return {"access_token": tokens["access_token"]}
+```
+
+The client stores the access token in memory (a JS variable or equivalent). On every subsequent request, the client sends it in the `Authorization` header:
+
+```
+Authorization: Bearer <access_token>
+```
 
 ### Handling login errors
 
@@ -331,20 +492,23 @@ from gatevault import InvalidCredentialsError, UnauthorizedError, GuardError
 try:
     tokens = oauth.login(username, password)
 except InvalidCredentialsError:
-    return {"error": "Invalid credentials"}, 401
+    # user not found
+    return {"error": "invalid credentials"}, 401
 except UnauthorizedError:
-    return {"error": "Invalid credentials"}, 401
+    # wrong password
+    return {"error": "invalid credentials"}, 401
 except GuardError:
-    return {"error": "Authentication failed"}, 500
+    # token creation failed unexpectedly
+    return {"error": "authentication failed"}, 500
 ```
 
-Note: returning the same error message for both `InvalidCredentialsError` and `UnauthorizedError` is intentional. Telling an attacker which one failed helps them enumerate valid usernames.
+> Return the same error message for both `InvalidCredentialsError` and `UnauthorizedError`. Distinguishing between them tells an attacker which usernames are valid.
 
 ---
 
 ## Protecting Routes
 
-`GateVault` is a decorator factory that wraps any function with token verification. The wrapped function never executes if the token is missing, expired, or invalid.
+`GateVault` wraps any function with token verification. The wrapped function never executes if the token is missing, expired, or invalid. On success, the decoded payload is injected as the `payload` keyword argument.
 
 ### Setup
 
@@ -361,28 +525,55 @@ gate = GateVault(token_manager=tm)
 def get_profile(payload=None):
     user_id = payload["user_id"]
     return db.get_user(user_id)
+```
 
-# call the function by passing the token
+The token is passed at call time:
+
+```python
 result = get_profile(token="eyJhbGci...")
 ```
 
-The decoded payload is injected as the `payload` keyword argument. Declaring `payload=None` as a default is a good habit so the function signature is clear.
+In a real app, the token comes from the `Authorization` header — your framework extracts it and you pass it to the protected function:
 
-### Accessing claims from the payload
+```python
+# Framework extracts the Authorization header
+# Client sent: Authorization: Bearer eyJhbGci...
+
+def profile_route(authorization_header: str):
+    token = authorization_header.replace("Bearer ", "")
+    try:
+        return get_profile(token=token)
+    except (GuardError, UnauthorizedError):
+        return {"error": "unauthorized"}, 401
+```
+
+### Multiple protected routes
+
+Decorate each function once and reuse:
 
 ```python
 @gate.protected
-def admin_only(payload=None):
-    if payload.get("role") != "admin":
-        raise UnauthorizedError("admin access required")
-    return get_admin_data()
+def get_profile(payload=None):
+    return db.get_user(payload["user_id"])
+
+@gate.protected
+def get_orders(payload=None):
+    return db.get_orders(payload["user_id"])
+
+@gate.protected
+def get_delivery(order_id: int, payload=None):
+    return db.get_delivery(order_id, payload["user_id"])
+
+@gate.protected
+def update_settings(settings: dict, payload=None):
+    return db.update_settings(payload["user_id"], settings)
 ```
 
-Any extra claims embedded at token creation time are available in the payload here.
+Each one is independently protected. The same access token works for all of them — the client sends the same `Authorization` header on every request, and each route passes it to its own protected function.
 
-### Passing other arguments
+### Passing arguments alongside the token
 
-The guard passes through any additional arguments to your function untouched:
+Your function can accept any arguments alongside `payload`:
 
 ```python
 @gate.protected
@@ -393,7 +584,33 @@ def get_post(post_id: int, payload=None):
         raise UnauthorizedError("not your post")
     return post
 
-get_post(post_id=7, token="eyJhbGci...")
+# pass token and other args together
+result = get_post(post_id=7, token="eyJhbGci...")
+```
+
+### Role-based access using claims
+
+Embed the role at token creation time:
+
+```python
+tokens = oauth.login(username, password)
+# internally: tm.create_access_token(user_id=user.id, role=user.role)
+```
+
+Check it in your protected function:
+
+```python
+@gate.protected
+def admin_only(payload=None):
+    if payload.get("role") != "admin":
+        raise UnauthorizedError("admin access required")
+    return get_admin_data()
+
+@gate.protected
+def moderator_or_above(payload=None):
+    if payload.get("role") not in ("admin", "moderator"):
+        raise UnauthorizedError("insufficient permissions")
+    return get_mod_tools()
 ```
 
 ### Handling guard errors
@@ -404,8 +621,10 @@ from gatevault import GuardError, UnauthorizedError
 try:
     result = get_profile(token=incoming_token)
 except GuardError as e:
+    # token missing, expired, or malformed
     return {"error": str(e)}, 401
 except UnauthorizedError as e:
+    # invalid signature or permission check failed
     return {"error": str(e)}, 401
 ```
 
@@ -413,7 +632,7 @@ except UnauthorizedError as e:
 
 ## Exception Handling
 
-All gatevault exceptions inherit from `GatevaultError`. You can catch at any level of the hierarchy depending on how granular your error handling needs to be.
+All gatevault exceptions inherit from `GatevaultError`. Catch broadly or specifically depending on what you need.
 
 ```
 GatevaultError
@@ -443,7 +662,7 @@ from gatevault import (
 )
 ```
 
-### Catching broadly
+### Catching broadly — one handler for everything
 
 ```python
 try:
@@ -452,27 +671,66 @@ except GatevaultError as e:
     return {"error": str(e)}, 401
 ```
 
-### Catching specifically
+### Catching specifically — different response per failure
 
 ```python
 try:
     payload = tm.decode_token(token)
 except TokenExpiredError:
-    return {"error": "token expired"}, 401
+    # access token expired — tell client to use refresh token
+    return {"error": "token expired", "code": "TOKEN_EXPIRED"}, 401
 except InvalidTokenError:
-    return {"error": "invalid token"}, 401
+    # signature mismatch — possible tampering
+    return {"error": "invalid token", "code": "INVALID_TOKEN"}, 401
 except TokenDecodeError:
-    return {"error": "malformed token"}, 400
+    # token string is malformed — bad format
+    return {"error": "malformed token", "code": "DECODE_ERROR"}, 400
 ```
 
-### Catching by category
+### Catching by category — group related errors
 
 ```python
 try:
     payload = tm.decode_token(token)
 except TokenError:
-    # catches TokenExpiredError, InvalidTokenError, and TokenDecodeError
+    # catches all three: TokenExpiredError, InvalidTokenError, TokenDecodeError
     return {"error": "token error"}, 401
+```
+
+```python
+try:
+    tokens = oauth.login(username, password)
+except GuardError:
+    # catches InvalidCredentialsError and UnauthorizedError
+    return {"error": "authentication failed"}, 401
+```
+
+### Real-world error handling pattern
+
+```python
+from gatevault import (
+    GatevaultError, InvalidCredentialsError, UnauthorizedError,
+    TokenExpiredError, TokenDecodeError, InvalidTokenError, GuardError
+)
+
+def handle_login(username: str, password: str):
+    try:
+        tokens = oauth.login(username, password)
+        return {"access_token": tokens["access_token"]}, 200
+    except (InvalidCredentialsError, UnauthorizedError):
+        return {"error": "invalid credentials"}, 401
+    except GuardError:
+        return {"error": "authentication failed"}, 500
+
+def handle_protected_request(token: str):
+    try:
+        return get_profile(token=token)
+    except TokenExpiredError:
+        return {"error": "token expired", "action": "refresh"}, 401
+    except (InvalidTokenError, TokenDecodeError, GuardError):
+        return {"error": "unauthorized"}, 401
+    except UnauthorizedError:
+        return {"error": "forbidden"}, 403
 ```
 
 ---
@@ -481,38 +739,59 @@ except TokenError:
 
 ### `ShortKeyWarning`
 
-Issued at `TokenManager` creation if the secret key is shorter than 32 bytes. HS256 requires at least 32 bytes for adequate security per RFC 7518. This is a warning, not an error — your app will still run, but you should use a longer key in production.
+Issued at `TokenManager` creation if the secret key is shorter than 32 bytes. HS256 requires at least 32 bytes per RFC 7518. This is a warning, not an error — your app will still run.
+
+```python
+import warnings
+from gatevault import TokenManager, ShortKeyWarning
+
+# This triggers a ShortKeyWarning
+tm = TokenManager(secret_key="tooshort", access_expiry_minutes=15, refresh_expiry_days=7)
+# UserWarning: Secret key is shorter than the recommended 32 bytes for HS256...
+```
+
+### Suppressing in tests
 
 ```python
 import warnings
 from gatevault import ShortKeyWarning
 
-# suppress in tests
 warnings.filterwarnings("ignore", category=ShortKeyWarning)
 
-# treat as a hard error in CI to catch misconfigurations early
-warnings.filterwarnings("error", category=ShortKeyWarning)
+tm = TokenManager(secret_key="short", access_expiry_minutes=15, refresh_expiry_days=7)
+# no warning
 ```
 
-To generate a secure key:
+### Treating as an error in CI
 
-```bash
-python -c "import secrets; print(secrets.token_hex(32))"
+```python
+warnings.filterwarnings("error", category=ShortKeyWarning)
+
+# Now this raises instead of warning — catches misconfigurations early
+tm = TokenManager(secret_key="tooshort", access_expiry_minutes=15, refresh_expiry_days=7)
+# ShortKeyWarning: Secret key is shorter than the recommended 32 bytes...
 ```
 
 ---
 
 ## Framework Integration
 
-gatevault is framework-agnostic but slots naturally into FastAPI and Flask.
+gatevault is framework-agnostic. Here is how it fits into FastAPI and Flask with proper token handling.
 
 ### FastAPI
 
+The full flow — register, login, protected route, refresh:
+
 ```python
 import os
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Response, Cookie
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from gatevault import TokenManager, OAuthHandler, GateVault, hash_password
-from gatevault import InvalidCredentialsError, UnauthorizedError, GuardError, TokenExpiredError
+from gatevault import (
+    InvalidCredentialsError, UnauthorizedError,
+    GuardError, TokenExpiredError, InvalidTokenError, TokenDecodeError
+)
 
 app = FastAPI()
 
@@ -521,60 +800,118 @@ tm = TokenManager(
     access_expiry_minutes=15,
     refresh_expiry_days=7
 )
-
 gate = GateVault(token_manager=tm)
 oauth = OAuthHandler(token_manager=tm, get_user=get_user_from_db)
 
 
+class AuthRequest(BaseModel):
+    username: str
+    password: str
+
+
+# Registration
 @app.post("/register")
-def register(username: str, password: str):
-    hashed = hash_password(password)
-    db.create_user(username=username, hashed_password=hashed)
+def register(body: AuthRequest):
+    hashed = hash_password(body.password)
+    db.create_user(username=body.username, hashed_password=hashed)
     return {"message": "registered"}
 
 
+# Login — access token in body, refresh token in httpOnly cookie
 @app.post("/login")
-def login(username: str, password: str):
+def login(body: AuthRequest, response: Response):
     try:
-        return oauth.login(username, password)
+        tokens = oauth.login(body.username, body.password)
     except (InvalidCredentialsError, UnauthorizedError):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+        raise HTTPException(status_code=401, detail="invalid credentials")
+
+    response.set_cookie(
+        key="refresh_token",
+        value=tokens["refresh_token"],
+        httponly=True,
+        secure=True,
+        samesite="strict"
+    )
+    return {"access_token": tokens["access_token"]}
 
 
+# Protected functions — defined once
+@gate.protected
+def get_profile(payload=None):
+    return db.get_user(payload["user_id"])
+
+@gate.protected
+def get_orders(payload=None):
+    return db.get_orders(payload["user_id"])
+
+
+# Routes — extract token from Authorization header, pass to protected function
 @app.get("/profile")
 def profile(authorization: str = Header(...)):
     token = authorization.replace("Bearer ", "")
-
-    @gate.protected
-    def _inner(payload=None):
-        return {"user_id": payload["user_id"]}
-
     try:
-        return _inner(token=token)
+        return get_profile(token=token)
     except (GuardError, UnauthorizedError):
-        raise HTTPException(status_code=401, detail="Unauthorized")
+        raise HTTPException(status_code=401, detail="unauthorized")
+
+@app.get("/orders")
+def orders(authorization: str = Header(...)):
+    token = authorization.replace("Bearer ", "")
+    try:
+        return get_orders(token=token)
+    except (GuardError, UnauthorizedError):
+        raise HTTPException(status_code=401, detail="unauthorized")
 
 
+# Refresh — refresh token comes from httpOnly cookie, not body
 @app.post("/refresh")
-def refresh(refresh_token: str):
+def refresh(response: Response, refresh_token: str = Cookie(...)):
     try:
         payload = tm.decode_token(refresh_token)
-        if payload["type"] != "refresh":
-            raise HTTPException(status_code=400, detail="expected refresh token")
-        new_access = tm.create_access_token(user_id=payload["user_id"])
-        new_refresh = tm.create_refresh_token(user_id=payload["user_id"])
-        return {"access_token": new_access, "refresh_token": new_refresh, "token_type": "bearer"}
     except TokenExpiredError:
-        raise HTTPException(status_code=401, detail="refresh token expired")
+        raise HTTPException(status_code=401, detail="session expired")
+    except (InvalidTokenError, TokenDecodeError):
+        raise HTTPException(status_code=401, detail="invalid token")
+
+    if payload["type"] != "refresh":
+        raise HTTPException(status_code=400, detail="wrong token type")
+
+    db.revoke_refresh_token(refresh_token)
+
+    new_access = tm.create_access_token(user_id=payload["user_id"])
+    new_refresh = tm.create_refresh_token(user_id=payload["user_id"])
+
+    db.store_refresh_token(new_refresh, user_id=payload["user_id"])
+
+    response.set_cookie(
+        key="refresh_token",
+        value=new_refresh,
+        httponly=True,
+        secure=True,
+        samesite="strict"
+    )
+    return {"access_token": new_access}
+
+
+# Logout — clear the cookie
+@app.post("/logout")
+def logout(response: Response, refresh_token: str = Cookie(None)):
+    if refresh_token:
+        db.revoke_refresh_token(refresh_token)
+    response.delete_cookie("refresh_token")
+    return {"message": "logged out"}
 ```
 
 ### Flask
 
 ```python
 import os
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, make_response
 from gatevault import TokenManager, OAuthHandler, GateVault, hash_password
-from gatevault import InvalidCredentialsError, UnauthorizedError, GuardError
+from gatevault import (
+    InvalidCredentialsError, UnauthorizedError,
+    GuardError, TokenExpiredError, InvalidTokenError, TokenDecodeError
+)
 
 app = Flask(__name__)
 
@@ -583,16 +920,16 @@ tm = TokenManager(
     access_expiry_minutes=15,
     refresh_expiry_days=7
 )
-
 gate = GateVault(token_manager=tm)
 oauth = OAuthHandler(token_manager=tm, get_user=get_user_from_db)
 
 
-def get_token_from_request():
+def get_token_from_header():
     auth = request.headers.get("Authorization", "")
     return auth.replace("Bearer ", "")
 
 
+# Registration
 @app.post("/register")
 def register():
     data = request.json
@@ -601,132 +938,267 @@ def register():
     return jsonify({"message": "registered"})
 
 
+# Login — access token in body, refresh token in httpOnly cookie
 @app.post("/login")
 def login():
     data = request.json
     try:
         tokens = oauth.login(data["username"], data["password"])
-        return jsonify(tokens)
     except (InvalidCredentialsError, UnauthorizedError):
         return jsonify({"error": "invalid credentials"}), 401
 
+    response = make_response(jsonify({"access_token": tokens["access_token"]}))
+    response.set_cookie(
+        "refresh_token",
+        tokens["refresh_token"],
+        httponly=True,
+        secure=True,
+        samesite="Strict"
+    )
+    return response
 
+
+# Protected functions — defined once
+@gate.protected
+def get_profile(payload=None):
+    return db.get_user(payload["user_id"])
+
+@gate.protected
+def get_orders(payload=None):
+    return db.get_orders(payload["user_id"])
+
+
+# Routes — extract token from Authorization header
 @app.get("/profile")
 def profile():
-    token = get_token_from_request()
-
-    @gate.protected
-    def _inner(payload=None):
-        return jsonify({"user_id": payload["user_id"]})
-
+    token = get_token_from_header()
     try:
-        return _inner(token=token)
+        return jsonify(get_profile(token=token))
     except (GuardError, UnauthorizedError):
         return jsonify({"error": "unauthorized"}), 401
+
+@app.get("/orders")
+def orders():
+    token = get_token_from_header()
+    try:
+        return jsonify(get_orders(token=token))
+    except (GuardError, UnauthorizedError):
+        return jsonify({"error": "unauthorized"}), 401
+
+
+# Refresh — reads refresh token from httpOnly cookie
+@app.post("/refresh")
+def refresh():
+    refresh_token = request.cookies.get("refresh_token")
+    if not refresh_token:
+        return jsonify({"error": "no refresh token"}), 401
+
+    try:
+        payload = tm.decode_token(refresh_token)
+    except TokenExpiredError:
+        return jsonify({"error": "session expired"}), 401
+    except (InvalidTokenError, TokenDecodeError):
+        return jsonify({"error": "invalid token"}), 401
+
+    if payload["type"] != "refresh":
+        return jsonify({"error": "wrong token type"}), 400
+
+    db.revoke_refresh_token(refresh_token)
+
+    new_access = tm.create_access_token(user_id=payload["user_id"])
+    new_refresh = tm.create_refresh_token(user_id=payload["user_id"])
+
+    db.store_refresh_token(new_refresh, user_id=payload["user_id"])
+
+    response = make_response(jsonify({"access_token": new_access}))
+    response.set_cookie(
+        "refresh_token",
+        new_refresh,
+        httponly=True,
+        secure=True,
+        samesite="Strict"
+    )
+    return response
+
+
+# Logout
+@app.post("/logout")
+def logout():
+    refresh_token = request.cookies.get("refresh_token")
+    if refresh_token:
+        db.revoke_refresh_token(refresh_token)
+    response = make_response(jsonify({"message": "logged out"}))
+    response.delete_cookie("refresh_token")
+    return response
 ```
 
 ---
 
 ## Using gatevault in Parts
 
-You do not have to use the whole package. Each part is independent and works on its own.
+You do not have to use the whole package. Each part is independent.
 
 ### Just Hashing
 
-No tokens, no guards — just password hashing and verification:
+No tokens, no guards — just bcrypt password management:
 
 ```python
 from gatevault import hash_password, verify_password
 
-# at registration
+# Registration
 hashed = hash_password("user_password")
-db.save(hashed)
+db.save_user(hashed_password=hashed)
 
-# at login
-if verify_password("user_password", db.get_hash(user_id)):
-    # proceed with login
+# Login
+user = db.get_user(username)
+if verify_password("user_password", user.hashed_password):
+    # authenticated — issue tokens however you like
     pass
+else:
+    raise Exception("wrong password")
+
+# Password change
+new_hash = hash_password("new_password")
+db.update_password(user_id=user.id, hashed_password=new_hash)
 ```
-
-No other setup needed. `hash_password` and `verify_password` are standalone functions with no dependencies on the rest of the package.
-
----
 
 ### Just Tokens
 
-If you have your own login and auth flow and only want JWT management:
+Your own login flow, but JWT management handled by gatevault:
 
 ```python
 from gatevault import TokenManager
 from gatevault import TokenExpiredError, InvalidTokenError, TokenDecodeError
 
 tm = TokenManager(
-    secret_key="your-secret",
+    secret_key="your-very-secure-secret-key-32-bytes",
     access_expiry_minutes=30,
     refresh_expiry_days=14
 )
 
-# issue tokens however you like
+# issue tokens after your own auth check
 access = tm.create_access_token(user_id=1)
 refresh = tm.create_refresh_token(user_id=1)
 
-# with extra claims
-access = tm.create_access_token(user_id=1, role="admin")
+# embed extra claims
+access = tm.create_access_token(user_id=1, role="admin", plan="pro")
 
-# decode later
+# decode and verify
 try:
     payload = tm.decode_token(access)
-    print(payload["user_id"], payload["role"])
+    print(payload["user_id"])  # 1
+    print(payload["role"])     # "admin"
+    print(payload["type"])     # "access"
 except TokenExpiredError:
-    pass
+    print("expired")
 except InvalidTokenError:
-    pass
+    print("tampered")
+except TokenDecodeError:
+    print("malformed")
 ```
-
----
 
 ### Just Guards
 
-If you already have tokens from your own system and just want decorator-based protection:
+You already have tokens, you just want decorator-based protection:
 
 ```python
 from gatevault import TokenManager, GateVault
 from gatevault import GuardError, UnauthorizedError
 
 tm = TokenManager(
-    secret_key="your-secret",
+    secret_key="your-very-secure-secret-key-32-bytes",
     access_expiry_minutes=15,
     refresh_expiry_days=7
 )
 gate = GateVault(token_manager=tm)
 
 @gate.protected
-def sensitive_action(data: dict, payload=None):
-    user_id = payload["user_id"]
-    return process(data, user_id)
+def get_dashboard(payload=None):
+    return {"user_id": payload["user_id"], "role": payload.get("role")}
 
+@gate.protected
+def admin_panel(payload=None):
+    if payload.get("role") != "admin":
+        raise UnauthorizedError("admins only")
+    return get_admin_data()
+
+@gate.protected
+def process_order(order_id: int, payload=None):
+    return db.process(order_id, user_id=payload["user_id"])
+
+# call with token from wherever you got it
 try:
-    result = sensitive_action(data={"key": "value"}, token=incoming_token)
-except (GuardError, UnauthorizedError):
-    return 401
+    result = get_dashboard(token=incoming_token)
+except GuardError:
+    return {"error": "unauthorized"}, 401
+except UnauthorizedError:
+    return {"error": "forbidden"}, 403
 ```
 
 ---
 
 ## Token Refresh & Rotation
 
-gatevault creates new tokens on demand but does not manage token storage or invalidation — that lives in your application. Here is the recommended pattern:
+gatevault creates tokens on demand but does not manage storage or invalidation — that lives in your application.
 
-### The refresh flow
+### Why you need a refresh token store
+
+JWTs cannot be invalidated once issued. Without a store, a stolen refresh token is valid until it expires — potentially days. With a store, you can:
+
+- Revoke tokens on logout
+- Detect token reuse (a sign of theft)
+- Force re-login on password change or suspicious activity
+
+### Full rotation pattern
 
 ```python
 from gatevault import TokenExpiredError, InvalidTokenError, TokenDecodeError
 
-def refresh_tokens(refresh_token: str):
+def rotate_tokens(refresh_token: str):
+    # 1. Verify the refresh token
     try:
         payload = tm.decode_token(refresh_token)
     except TokenExpiredError:
-        # refresh token expired — force re-login
+        return {"error": "session expired, please log in again"}, 401
+    except (InvalidTokenError, TokenDecodeError):
+        return {"error": "invalid token"}, 401
+
+    # 2. Check it's actually a refresh token
+    if payload["type"] != "refresh":
+        return {"error": "wrong token type"}, 400
+
+    # 3. Check it hasn't already been used (reuse detection)
+    if not db.is_refresh_token_valid(refresh_token):
+        # Token was already rotated — possible theft
+        # Revoke all tokens for this user and force re-login
+        db.revoke_all_tokens_for_user(payload["user_id"])
+        return {"error": "token reuse detected, please log in again"}, 401
+
+    # 4. Revoke the old refresh token
+    db.revoke_refresh_token(refresh_token)
+
+    # 5. Issue new pair
+    new_access = tm.create_access_token(user_id=payload["user_id"])
+    new_refresh = tm.create_refresh_token(user_id=payload["user_id"])
+
+    # 6. Store the new refresh token
+    db.store_refresh_token(new_refresh, user_id=payload["user_id"])
+
+    return {
+        "access_token": new_access,
+        "new_refresh_token": new_refresh
+    }
+```
+
+### Minimal refresh (no reuse detection)
+
+If you don't need reuse detection, here is the minimal version:
+
+```python
+def rotate_tokens(refresh_token: str):
+    try:
+        payload = tm.decode_token(refresh_token)
+    except TokenExpiredError:
         return {"error": "session expired"}, 401
     except (InvalidTokenError, TokenDecodeError):
         return {"error": "invalid token"}, 401
@@ -734,26 +1206,11 @@ def refresh_tokens(refresh_token: str):
     if payload["type"] != "refresh":
         return {"error": "wrong token type"}, 400
 
-    # invalidate the old refresh token in your database
-    db.revoke_refresh_token(refresh_token)
-
-    # issue a new pair
     new_access = tm.create_access_token(user_id=payload["user_id"])
     new_refresh = tm.create_refresh_token(user_id=payload["user_id"])
 
-    # store the new refresh token
-    db.store_refresh_token(new_refresh, user_id=payload["user_id"])
-
-    return {
-        "access_token": new_access,
-        "refresh_token": new_refresh,
-        "token_type": "bearer"
-    }
+    return {"access_token": new_access, "refresh_token": new_refresh}
 ```
-
-### Why rotation matters
-
-Without rotation, a stolen refresh token is valid until it expires — potentially days. With rotation, every use of the refresh token produces a new one and the old one is revoked. If a stolen token is used, the legitimate user's next refresh attempt will fail because their token was already rotated, alerting them that something is wrong.
 
 ---
 
@@ -761,27 +1218,62 @@ Without rotation, a stolen refresh token is valid until it expires — potential
 
 ### Secret key
 
-- Use at least 32 bytes — gatevault will warn you if you don't
-- Generate with `python -c "import secrets; print(secrets.token_hex(32))"`
-- Never hardcode it — use environment variables
-- Rotate it only when necessary — rotation invalidates all existing tokens immediately
+- Use at least 32 bytes — gatevault warns you if you don't
+- Generate with: `python -c "import secrets; print(secrets.token_hex(32))"`
+- Store in an environment variable — never hardcode
+- Rotating invalidates all existing tokens immediately — only do it when necessary (breach, employee offboarding)
 
 ### Token storage on the client
 
-- **Access token** — store in memory (a JS variable). Short-lived so the exposure window is small. Do not store in localStorage.
-- **Refresh token** — store in an httpOnly cookie. httpOnly prevents JavaScript from reading it, which reduces XSS exposure. Send it only to your refresh endpoint, never on regular requests.
+| Token | Where to store | Why |
+|---|---|---|
+| Access token | Memory (JS variable) | Short-lived, not persisted, wiped on tab close |
+| Refresh token | httpOnly cookie | Can't be read by JavaScript — XSS safe |
 
-### What not to put in a token payload
+Never store tokens in `localStorage` — it is accessible to any JavaScript on the page, including injected scripts.
 
-The payload is base64 encoded, not encrypted. Anyone with the token string can decode and read it. Never put passwords, credit card numbers, or any sensitive data in the payload. `user_id`, `role`, and `org_id` are fine.
+### What not to put in the payload
+
+The JWT payload is base64 encoded, not encrypted. Anyone with the token string can decode and read it. Keep it to identifiers and non-sensitive metadata:
+
+```python
+# Fine
+tm.create_access_token(user_id=42, role="admin", org_id=7)
+
+# Never do this
+tm.create_access_token(user_id=42, email="john@example.com", password_hash="$2b$...")
+```
 
 ### Refresh token revocation
 
-Tokens cannot be invalidated once issued — that is a fundamental property of stateless JWTs. If you need true revocation (e.g. logout, password change, suspicious activity), maintain a blocklist in your database or cache and check against it in your refresh endpoint or guard logic.
+Tokens cannot be invalidated once issued. For true revocation (logout, password change, suspicious activity), maintain a table of valid refresh tokens in your database:
+
+```sql
+CREATE TABLE refresh_tokens (
+    token TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW(),
+    expires_at TIMESTAMP NOT NULL
+);
+```
+
+On every refresh request, check the token exists in this table before issuing a new pair. On logout or password change, delete the row.
 
 ### Login enumeration
 
-When a login fails, return the same error message whether the username does not exist or the password is wrong. Distinguishing between the two tells an attacker which usernames are valid accounts.
+Return the same error for "user not found" and "wrong password". Distinguishing them tells an attacker which usernames exist:
+
+```python
+# Good
+except (InvalidCredentialsError, UnauthorizedError):
+    return {"error": "invalid credentials"}, 401
+
+# Bad — tells attacker the username is valid
+except InvalidCredentialsError:
+    return {"error": "user not found"}, 404
+except UnauthorizedError:
+    return {"error": "wrong password"}, 401
+```
 
 ---
 
@@ -799,7 +1291,7 @@ When a login fails, return the same error message whether the username does not 
 |---|---|---|
 | `create_access_token(user_id, **kwargs)` | `str` | Creates a signed access token. Extra kwargs embedded in payload. |
 | `create_refresh_token(user_id, **kwargs)` | `str` | Creates a signed refresh token. Extra kwargs embedded in payload. |
-| `decode_token(token)` | `dict` | Verifies and decodes a token. Raises on failure. |
+| `decode_token(token)` | `dict` | Verifies signature and expiry. Returns payload dict. Raises on failure. |
 
 ---
 
@@ -808,11 +1300,11 @@ When a login fails, return the same error message whether the username does not 
 | Parameter | Type | Description |
 |---|---|---|
 | `token_manager` | `TokenManager` | Configured TokenManager instance. |
-| `get_user` | `Callable[[str], Any \| None]` | User lookup function. Must return object with `id` and `hashed_password`, or `None`. |
+| `get_user` | `Callable[[str], Any \| None]` | Lookup function. Must return object with `id` and `hashed_password`, or `None`. |
 
 | Method | Returns | Description |
 |---|---|---|
-| `login(username, password)` | `dict` | Authenticates user and returns access/refresh token pair. |
+| `login(username, password)` | `dict` | Authenticates user. Returns `{"access_token", "refresh_token", "token_type"}`. |
 
 ---
 
@@ -824,7 +1316,7 @@ When a login fails, return the same error message whether the username does not 
 
 | Method | Returns | Description |
 |---|---|---|
-| `protected(f)` | `Callable` | Decorator. Verifies token before function runs, injects payload as kwarg. |
+| `protected(f)` | `Callable` | Decorator. Verifies token, injects decoded payload as `payload` kwarg. |
 
 ---
 
@@ -832,9 +1324,9 @@ When a login fails, return the same error message whether the username does not 
 
 | Parameter | Type | Description |
 |---|---|---|
-| `plain` | `str` | Plain text password. Pass the raw string — encoding is handled internally. |
+| `plain` | `str` | Plain text password. Encoding is handled internally. |
 
-Returns the bcrypt hash as a string. Raises `HashingError` if bcrypt fails unexpectedly.
+Returns bcrypt hash string. Raises `HashingError` on unexpected failure.
 
 ---
 
@@ -843,9 +1335,9 @@ Returns the bcrypt hash as a string. Raises `HashingError` if bcrypt fails unexp
 | Parameter | Type | Description |
 |---|---|---|
 | `plain` | `str` | Plain text password to check. |
-| `hashed` | `str` | Stored bcrypt hash to check against. |
+| `hashed` | `str` | Stored bcrypt hash. |
 
-Returns `True` if the password matches, `False` otherwise. Never raises on a wrong password.
+Returns `True` if match, `False` otherwise. Never raises on wrong password.
 
 ---
 
@@ -853,32 +1345,41 @@ Returns `True` if the password matches, `False` otherwise. Never raises on a wro
 
 **Framework-agnostic**
 
-Tying gatevault to FastAPI or Flask would limit who can use it. The core auth logic — hashing, signing, verifying — has nothing to do with HTTP. Keeping it pure Python means it works anywhere and framework-specific integrations can be layered on top.
+Tying gatevault to FastAPI or Flask would limit who can use it. Auth logic — hashing, signing, verifying — has nothing to do with HTTP. Pure Python means it works anywhere.
 
-**Class-based `TokenManager` instead of functions**
+**Class-based `TokenManager`**
 
-The secret key and expiry settings are configuration — they belong on an instance, not passed into every function call. Configure once at startup, use everywhere.
+The secret key and expiry settings are configuration — they belong on an instance, not passed into every function call. Configure once at startup, use everywhere without threading arguments through every call.
+
+**Shared `TokenManager` across `OAuthHandler` and `GateVault`**
+
+`OAuthHandler` creates tokens. `GateVault` verifies them. They don't communicate directly — the shared `TokenManager` instance is the trust anchor. Same secret key in, same secret key out.
 
 **Payload injected as a keyword argument**
 
-`payload=payload` is explicit. The decorated function always knows where its auth context comes from and can choose to accept it or ignore it. Positional injection would silently break functions whose arguments do not match the expected order.
+`payload=payload` is explicit. The decorated function always knows where its auth data comes from. Positional injection would silently break functions whose arguments don't match the expected order.
 
 **Wrapping third-party exceptions**
 
-`PyJWT` and `bcrypt` exceptions never leak through the gatevault API. Consumers only need to know gatevault exceptions. If an underlying library changes its exception names in a future version, only gatevault updates — not every app built on it.
+`PyJWT` and `bcrypt` exceptions never surface through the gatevault API. Consumers only need to know gatevault exceptions. If an underlying library changes exception names in a future version, only gatevault updates.
 
 **`verify_password` returns bool, not raises**
 
-A wrong password is an expected outcome, not an exceptional one. The caller decides what to do — raise, log, increment a failed attempt counter, or something else.
+A wrong password is an expected outcome, not an exceptional one. The caller decides whether to raise, log, increment a failed attempt counter, or something else entirely.
+
+**`OAuthHandler.login` returns both tokens**
+
+The server decides how to deliver each token to the client — access token in the body, refresh token in an httpOnly cookie. Returning both from `login` gives the framework integration layer that flexibility.
 
 ---
 
 ## Known Limitations
 
-- Refresh token invalidation is not handled by gatevault — you need a database or cache to track and revoke issued refresh tokens
-- Only HS256 (symmetric) signing is supported — RS256 (asymmetric keypair) is not yet available
-- `GateVault.protected` expects the token as a keyword argument — you may need a thin adapter in frameworks that inject request objects differently
-- No built-in rate limiting on login attempts — implement this at the application or infrastructure level
+- Refresh token invalidation is not built in — you need a database or cache to track and revoke issued refresh tokens
+- Only HS256 (symmetric signing) is supported — RS256 (asymmetric keypair) is not yet available
+- `GateVault.protected` expects `token` as a keyword argument — you may need a thin adapter in frameworks with unusual request injection patterns
+- No built-in rate limiting on login attempts — implement at the application or infrastructure level
+- No async support — all methods are synchronous. Async wrappers are on the roadmap
 
 ---
 
@@ -886,9 +1387,9 @@ A wrong password is an expected outcome, not an exceptional one. The caller deci
 
 - RS256 support for asymmetric key signing
 - Built-in token blocklist interface for revocation
-- Async-compatible versions of all methods
+- Async-compatible versions of all methods (`async def`)
 - Role-based access control helpers on `GateVault`
-- FastAPI and Flask integration packages
+- FastAPI and Flask integration packages as optional extras
 
 ---
 
@@ -899,8 +1400,9 @@ Contributions are welcome. Open an issue first to discuss what you want to chang
 ```bash
 git clone https://github.com/RichardOyelowo/gatevault
 cd gatevault
-pip install -e ".[dev]"
-pytest
+pip install -e .
+pip install pytest
+pytest tests/ -v
 ```
 
 ---
