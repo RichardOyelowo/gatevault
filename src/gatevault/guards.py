@@ -60,7 +60,7 @@ class GateVault:
             get_dashboard(token="eyJhbGci...")
         """
         @wraps(f)
-        def decorated_function(token, *args, **kwargs):
+        def decorated_function(token = None, *args, **kwargs):
             if not token:
                 raise GuardError("No token provided")
             try:
