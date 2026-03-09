@@ -110,9 +110,20 @@ def register(username: str, plain_password: str):
 # ---------------------------------------------------------------------------
 # Login — returns access token in body, refresh token goes in httpOnly cookie
 #
-# The client stores the access token in memory (a JS variable).
-# The refresh token is stored in an httpOnly cookie — it cannot be read
-# by JavaScript, which reduces XSS exposure.
+# After login:
+#   - The server sets the refresh token as an httpOnly cookie automatically.
+#     The browser stores it and sends it on every request to /refresh.
+#   - The access token is returned in the response body.
+#     The CLIENT is responsible for storing it (in a JS variable, not localStorage)
+#     and sending it in the Authorization header on every protected request:
+#
+#       Authorization: Bearer <access_token>
+#
+#   Client-side example (JavaScript):
+#       const { access_token } = await fetch("/login", { method: "POST", ... }).then(r => r.json())
+#       // store in memory — not localStorage
+#       // then on every protected request:
+#       await fetch("/profile", { headers: { "Authorization": `Bearer ${access_token}` } })
 # ---------------------------------------------------------------------------
 
 def login(username: str, password: str):
@@ -124,7 +135,7 @@ def login(username: str, password: str):
     # In a real app, set the refresh token as an httpOnly cookie:
     # response.set_cookie("refresh_token", tokens["refresh_token"], httponly=True)
     #
-    # Return only the access token in the response body:
+    # Return only the access token — the client stores and manages it:
     return {"access_token": tokens["access_token"]}
 
 
@@ -149,10 +160,12 @@ def update_settings(settings: dict, payload=None):
 
 
 # ---------------------------------------------------------------------------
-# Routes — the framework extracts the token from the Authorization header
-# and passes it to the protected function
+# Routes — the client sends the access token in the Authorization header.
+# The framework gives your route access to that header.
+# You extract the token and pass it to the protected function.
+# gatevault verifies it and injects the payload.
 #
-# Client sends: Authorization: Bearer <access_token>
+# Client sends on every request: Authorization: Bearer <access_token>
 # ---------------------------------------------------------------------------
 
 def profile_route(authorization_header: str):
@@ -488,10 +501,36 @@ def login_route(username, password, response):
     return {"access_token": tokens["access_token"]}
 ```
 
-The client stores the access token in memory (a JS variable or equivalent). On every subsequent request, the client sends it in the `Authorization` header:
+The server's job ends there. The client receives the access token in the response body and is responsible for storing it in memory (a JS variable, not `localStorage`). On every subsequent request, the client reads it from memory and puts it in the `Authorization` header manually:
 
 ```
 Authorization: Bearer <access_token>
+```
+
+The refresh token is different — the browser stores and sends httpOnly cookies automatically, so the client never has to handle it directly.
+
+Client-side example:
+
+```javascript
+// After login — store access token in memory
+const { access_token } = await fetch("/login", {
+    method: "POST",
+    body: JSON.stringify({ username, password })
+}).then(r => r.json())
+
+// On every protected request — send it in the Authorization header
+const profile = await fetch("/profile", {
+    headers: { "Authorization": `Bearer ${access_token}` }
+}).then(r => r.json())
+
+// When access token expires — browser sends refresh cookie automatically
+const refreshed = await fetch("/refresh", {
+    method: "POST",
+    credentials: "include"  // sends the httpOnly cookie
+}).then(r => r.json())
+
+// Store the new access token
+const new_access_token = refreshed.access_token
 ```
 
 ### Handling login errors
@@ -537,17 +576,11 @@ def get_profile(payload=None):
     return db.get_user(user_id)
 ```
 
-The token is passed at call time:
+The token is passed at call time via `token=`. In a real app, the token is not something you have directly in your server code — the client sends it in the `Authorization` header, your framework gives you access to that header, and you extract the token from it and pass it to the protected function:
 
 ```python
-result = get_profile(token="eyJhbGci...")
-```
-
-In a real app, the token comes from the `Authorization` header — your framework extracts it and you pass it to the protected function:
-
-```python
-# Framework extracts the Authorization header
 # Client sent: Authorization: Bearer eyJhbGci...
+# Framework gives you the header value — you strip "Bearer " and pass it in
 
 def profile_route(authorization_header: str):
     token = authorization_header.replace("Bearer ", "")
@@ -556,6 +589,8 @@ def profile_route(authorization_header: str):
     except (GuardError, UnauthorizedError):
         return {"error": "unauthorized"}, 401
 ```
+
+The client is responsible for storing the access token after login and attaching it to every request. gatevault only sees it at the moment you pass it to the protected function.
 
 ### Multiple protected routes
 
@@ -1422,5 +1457,4 @@ pytest tests/ -v
 Apache 2.0 — see [LICENSE](./LICENSE) for details.
 
 ---
-
-*Built by Richard for the love of development.*
+**Built by Richard for the love of development.**
