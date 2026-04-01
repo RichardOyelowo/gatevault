@@ -27,11 +27,14 @@ pip install richard-gatevault
 - [Password Hashing](#password-hashing)
 - [Token Management](#token-management)
 - [Login Flow](#login-flow)
+  - [Sync Login](#sync-login)
+  - [Async Login](#async-login)
 - [Protecting Routes](#protecting-routes)
 - [Exception Handling](#exception-handling)
 - [Warnings](#warnings)
 - [Framework Integration](#framework-integration)
-  - [FastAPI](#fastapi)
+  - [FastAPI (Async)](#fastapi-async)
+  - [FastAPI (Sync)](#fastapi-sync)
   - [Flask](#flask)
 - [Using gatevault in Parts](#using-gatevault-in-parts)
   - [Just Hashing](#just-hashing)
@@ -72,7 +75,7 @@ from gatevault import (
 
 ## The Full Picture
 
-Here is what a complete auth setup looks like end to end — registration, login, token storage, protected routes, and token refresh. If you only need one specific feature, jump to the relevant section.
+Here is what a complete auth setup looks like end to end — registration, login, token storage, protected routes, and token refresh. This example uses `async_login` for an async SQLAlchemy setup. If you are using a synchronous database, replace `async_login` with `login` and remove the `async`/`await` keywords from the login route.
 
 ```python
 import os
@@ -94,48 +97,42 @@ tm = TokenManager(
 )
 
 gate = GateVault(token_manager=tm)
-oauth = OAuthHandler(token_manager=tm, get_user=get_user_from_db)
+
+
+# ---------------------------------------------------------------------------
+# get_user — async version for use with async_login
+# ---------------------------------------------------------------------------
+
+async def get_user(username: str):
+    result = await db.execute(select(User).where(User.email == username))
+    return result.scalar_one_or_none()
+
+oauth = OAuthHandler(token_manager=tm, get_user=get_user)
 
 
 # ---------------------------------------------------------------------------
 # Registration — hash and store the password
 # ---------------------------------------------------------------------------
 
-def register(username: str, plain_password: str):
+async def register(username: str, plain_password: str):
     hashed = hash_password(plain_password)
-    db.create_user(username=username, hashed_password=hashed)
+    await db.create_user(username=username, hashed_password=hashed)
     return {"message": "registered"}
 
 
 # ---------------------------------------------------------------------------
-# Login — returns access token in body, refresh token goes in httpOnly cookie
-#
-# After login:
-#   - The server sets the refresh token as an httpOnly cookie automatically.
-#     The browser stores it and sends it on every request to /refresh.
-#   - The access token is returned in the response body.
-#     The CLIENT is responsible for storing it (in a JS variable, not localStorage)
-#     and sending it in the Authorization header on every protected request:
-#
-#       Authorization: Bearer <access_token>
-#
-#   Client-side example (JavaScript):
-#       const { access_token } = await fetch("/login", { method: "POST", ... }).then(r => r.json())
-#       // store in memory — not localStorage
-#       // then on every protected request:
-#       await fetch("/profile", { headers: { "Authorization": `Bearer ${access_token}` } })
+# Login — uses async_login since get_user is async
+# Returns access token in body, refresh token goes in httpOnly cookie
 # ---------------------------------------------------------------------------
 
-def login(username: str, password: str):
+async def login(username: str, password: str):
     try:
-        tokens = oauth.login(username, password)
+        tokens = await oauth.async_login(username, password)
     except (InvalidCredentialsError, UnauthorizedError):
         return {"error": "invalid credentials"}, 401
 
-    # In a real app, set the refresh token as an httpOnly cookie:
-    # response.set_cookie("refresh_token", tokens["refresh_token"], httponly=True)
-    #
-    # Return only the access token — the client stores and manages it:
+    # set refresh token as httpOnly cookie in your framework
+    # return only the access token in the response body
     return {"access_token": tokens["access_token"]}
 
 
@@ -153,42 +150,12 @@ def get_orders(payload=None):
     user_id = payload["user_id"]
     return db.get_orders(user_id)
 
-@gate.protected
-def update_settings(settings: dict, payload=None):
-    user_id = payload["user_id"]
-    return db.update_settings(user_id, settings)
-
-
-# ---------------------------------------------------------------------------
-# Routes — the client sends the access token in the Authorization header.
-# The framework gives your route access to that header.
-# You extract the token and pass it to the protected function.
-# gatevault verifies it and injects the payload.
-#
-# Client sends on every request: Authorization: Bearer <access_token>
-# ---------------------------------------------------------------------------
-
-def profile_route(authorization_header: str):
-    token = authorization_header.replace("Bearer ", "")
-    try:
-        return get_profile(token=token)
-    except (GuardError, UnauthorizedError):
-        return {"error": "unauthorized"}, 401
-
-def orders_route(authorization_header: str):
-    token = authorization_header.replace("Bearer ", "")
-    try:
-        return get_orders(token=token)
-    except (GuardError, UnauthorizedError):
-        return {"error": "unauthorized"}, 401
-
 
 # ---------------------------------------------------------------------------
 # Token refresh — client sends the refresh token (from cookie)
-# Server issues a new access token and rotates the refresh token
 # ---------------------------------------------------------------------------
 
-def refresh_route(refresh_token: str):
+async def refresh_route(refresh_token: str):
     try:
         payload = tm.decode_token(refresh_token)
     except TokenExpiredError:
@@ -199,15 +166,13 @@ def refresh_route(refresh_token: str):
     if payload["type"] != "refresh":
         return {"error": "wrong token type"}, 400
 
-    # Invalidate old refresh token in your DB before issuing a new one
-    db.revoke_refresh_token(refresh_token)
+    await db.revoke_refresh_token(refresh_token)
 
     new_access = tm.create_access_token(user_id=payload["user_id"])
     new_refresh = tm.create_refresh_token(user_id=payload["user_id"])
 
-    db.store_refresh_token(new_refresh, user_id=payload["user_id"])
+    await db.store_refresh_token(new_refresh, user_id=payload["user_id"])
 
-    # set new_refresh as httpOnly cookie in a real app
     return {"access_token": new_access}
 ```
 
@@ -267,7 +232,7 @@ You do not need to manage salts yourself. bcrypt generates a unique random salt 
 h1 = hash_password("same_password")
 h2 = hash_password("same_password")
 
-print(h1 == h2)                            # False — different salts
+print(h1 == h2)                             # False — different salts
 print(verify_password("same_password", h1)) # True
 print(verify_password("same_password", h2)) # True
 print(verify_password("wrong", h1))         # False
@@ -397,16 +362,6 @@ if payload["type"] != "access":
     raise UnauthorizedError("expected an access token, got refresh")
 ```
 
-This matters on your refresh endpoint — you only want refresh tokens there, not access tokens:
-
-```python
-def refresh_route(token: str):
-    payload = tm.decode_token(token)
-    if payload["type"] != "refresh":
-        return {"error": "wrong token type"}, 400
-    # proceed with issuing new tokens
-```
-
 ### TokenManager is shared
 
 `OAuthHandler` creates tokens using `TokenManager`. `GateVault` verifies tokens using the **same** `TokenManager`. They share the same secret key. Create one instance and pass it to both:
@@ -423,6 +378,8 @@ gate = GateVault(token_manager=tm)                          # uses tm to verify 
 ## Login Flow
 
 `OAuthHandler` wires together user lookup, password verification, and token creation into one call. It follows the OAuth2 Resource Owner Password Credentials flow.
+
+It supports both **synchronous** and **asynchronous** user lookup — use `login` for sync databases (SQLAlchemy sync, raw psycopg2) and `async_login` for async databases (async SQLAlchemy, asyncpg, Tortoise ORM).
 
 ### Setup
 
@@ -457,7 +414,11 @@ class User(Base):
         return self.password_hash   # gatevault expects hashed_password
 ```
 
-### What login does
+---
+
+### Sync Login
+
+Use `login` when your `get_user` function is a regular synchronous function:
 
 ```python
 tokens = oauth.login("john@example.com", "their_password")
@@ -476,15 +437,45 @@ print(tokens)
 2. Calls `verify_password(password, user.hashed_password)` — raises `UnauthorizedError` if it returns `False`
 3. Calls `create_access_token` and `create_refresh_token` — raises `GuardError` if token creation fails
 
+---
+
+### Async Login
+
+Use `async_login` when your `get_user` function is defined as `async def` — typically when using async SQLAlchemy, asyncpg, or any other async ORM. It is identical to `login` but awaits the `get_user` call.
+
+```python
+async def get_user(username: str):
+    result = await db.execute(select(User).where(User.email == username))
+    return result.scalar_one_or_none()
+
+oauth = OAuthHandler(token_manager=tm, get_user=get_user)
+
+# must be called with await inside an async context
+tokens = await oauth.async_login("john@example.com", "their_password")
+
+print(tokens)
+# {
+#     "access_token": "eyJhbGci...",
+#     "refresh_token": "eyJhbGci...",
+#     "token_type": "bearer"
+# }
+```
+
+`async_login` does the same three steps as `login` — the only difference is that `get_user` is awaited. The rest of the flow (password verification, token creation) remains synchronous.
+
+> If you call `async_login` with a synchronous `get_user`, it will raise a `TypeError` because you cannot `await` a non-coroutine. Conversely, calling `login` with an async `get_user` will return a coroutine object instead of a user — always match the method to your `get_user` type.
+
+---
+
 ### What to do with the tokens
 
 The access token goes back to the client in the response body. The refresh token should be set as an httpOnly cookie — it cannot be read by JavaScript:
 
 ```python
 # pseudocode — adjust to your framework
-def login_route(username, password, response):
+async def login_route(username, password, response):
     try:
-        tokens = oauth.login(username, password)
+        tokens = await oauth.async_login(username, password)
     except (InvalidCredentialsError, UnauthorizedError):
         return {"error": "invalid credentials"}, 401
 
@@ -539,7 +530,7 @@ const new_access_token = refreshed.access_token
 from gatevault import InvalidCredentialsError, UnauthorizedError, GuardError
 
 try:
-    tokens = oauth.login(username, password)
+    tokens = await oauth.async_login(username, password)
 except InvalidCredentialsError:
     # user not found
     return {"error": "invalid credentials"}, 401
@@ -579,9 +570,6 @@ def get_profile(payload=None):
 The token is passed at call time via `token=`. In a real app, the token is not something you have directly in your server code — the client sends it in the `Authorization` header, your framework gives you access to that header, and you extract the token from it and pass it to the protected function:
 
 ```python
-# Client sent: Authorization: Bearer eyJhbGci...
-# Framework gives you the header value — you strip "Bearer " and pass it in
-
 def profile_route(authorization_header: str):
     token = authorization_header.replace("Bearer ", "")
     try:
@@ -590,11 +578,7 @@ def profile_route(authorization_header: str):
         return {"error": "unauthorized"}, 401
 ```
 
-The client is responsible for storing the access token after login and attaching it to every request. gatevault only sees it at the moment you pass it to the protected function.
-
 ### Multiple protected routes
-
-Decorate each function once and reuse:
 
 ```python
 @gate.protected
@@ -614,11 +598,7 @@ def update_settings(settings: dict, payload=None):
     return db.update_settings(payload["user_id"], settings)
 ```
 
-Each one is independently protected. The same access token works for all of them — the client sends the same `Authorization` header on every request, and each route passes it to its own protected function.
-
 ### Passing arguments alongside the token
-
-Your function can accept any arguments alongside `payload`:
 
 ```python
 @gate.protected
@@ -629,20 +609,12 @@ def get_post(post_id: int, payload=None):
         raise UnauthorizedError("not your post")
     return post
 
-# pass token and other args together
 result = get_post(post_id=7, token="eyJhbGci...")
 ```
 
 ### Role-based access using claims
 
-Embed the role at token creation time:
-
-```python
-tokens = oauth.login(username, password)
-# internally: tm.create_access_token(user_id=user.id, role=user.role)
-```
-
-Check it in your protected function:
+Embed the role at token creation time and check it in your protected function:
 
 ```python
 @gate.protected
@@ -666,10 +638,8 @@ from gatevault import GuardError, UnauthorizedError
 try:
     result = get_profile(token=incoming_token)
 except GuardError as e:
-    # token missing, expired, or malformed
     return {"error": str(e)}, 401
 except UnauthorizedError as e:
-    # invalid signature or permission check failed
     return {"error": str(e)}, 401
 ```
 
@@ -707,75 +677,44 @@ from gatevault import (
 )
 ```
 
-### Catching broadly — one handler for everything
+### Catching broadly
 
 ```python
 try:
-    tokens = oauth.login(username, password)
+    tokens = await oauth.async_login(username, password)
 except GatevaultError as e:
     return {"error": str(e)}, 401
 ```
 
-### Catching specifically — different response per failure
+### Catching specifically
 
 ```python
 try:
     payload = tm.decode_token(token)
 except TokenExpiredError:
-    # access token expired — tell client to use refresh token
     return {"error": "token expired", "code": "TOKEN_EXPIRED"}, 401
 except InvalidTokenError:
-    # signature mismatch — possible tampering
     return {"error": "invalid token", "code": "INVALID_TOKEN"}, 401
 except TokenDecodeError:
-    # token string is malformed — bad format
     return {"error": "malformed token", "code": "DECODE_ERROR"}, 400
 ```
 
-### Catching by category — group related errors
+### Catching by category
 
 ```python
 try:
     payload = tm.decode_token(token)
 except TokenError:
-    # catches all three: TokenExpiredError, InvalidTokenError, TokenDecodeError
+    # catches TokenExpiredError, InvalidTokenError, TokenDecodeError
     return {"error": "token error"}, 401
 ```
 
 ```python
 try:
-    tokens = oauth.login(username, password)
+    tokens = await oauth.async_login(username, password)
 except GuardError:
     # catches InvalidCredentialsError and UnauthorizedError
     return {"error": "authentication failed"}, 401
-```
-
-### Real-world error handling pattern
-
-```python
-from gatevault import (
-    GatevaultError, InvalidCredentialsError, UnauthorizedError,
-    TokenExpiredError, TokenDecodeError, InvalidTokenError, GuardError
-)
-
-def handle_login(username: str, password: str):
-    try:
-        tokens = oauth.login(username, password)
-        return {"access_token": tokens["access_token"]}, 200
-    except (InvalidCredentialsError, UnauthorizedError):
-        return {"error": "invalid credentials"}, 401
-    except GuardError:
-        return {"error": "authentication failed"}, 500
-
-def handle_protected_request(token: str):
-    try:
-        return get_profile(token=token)
-    except TokenExpiredError:
-        return {"error": "token expired", "action": "refresh"}, 401
-    except (InvalidTokenError, TokenDecodeError, GuardError):
-        return {"error": "unauthorized"}, 401
-    except UnauthorizedError:
-        return {"error": "forbidden"}, 403
 ```
 
 ---
@@ -784,53 +723,36 @@ def handle_protected_request(token: str):
 
 ### `ShortKeyWarning`
 
-Issued at `TokenManager` creation if the secret key is shorter than 32 bytes. HS256 requires at least 32 bytes per RFC 7518. This is a warning, not an error — your app will still run.
+Issued at `TokenManager` creation if the secret key is shorter than 32 bytes. HS256 requires at least 32 bytes per RFC 7518.
 
 ```python
 import warnings
 from gatevault import TokenManager, ShortKeyWarning
 
-# This triggers a ShortKeyWarning
-tm = TokenManager(secret_key="tooshort", access_expiry_minutes=15, refresh_expiry_days=7)
-# UserWarning: Secret key is shorter than the recommended 32 bytes for HS256...
-```
-
-### Suppressing in tests
-
-```python
-import warnings
-from gatevault import ShortKeyWarning
-
 warnings.filterwarnings("ignore", category=ShortKeyWarning)
-
 tm = TokenManager(secret_key="short", access_expiry_minutes=15, refresh_expiry_days=7)
-# no warning
 ```
 
 ### Treating as an error in CI
 
 ```python
 warnings.filterwarnings("error", category=ShortKeyWarning)
-
-# Now this raises instead of warning — catches misconfigurations early
-tm = TokenManager(secret_key="tooshort", access_expiry_minutes=15, refresh_expiry_days=7)
-# ShortKeyWarning: Secret key is shorter than the recommended 32 bytes...
 ```
 
 ---
 
 ## Framework Integration
 
-gatevault is framework-agnostic. Here is how it fits into FastAPI and Flask with proper token handling.
+### FastAPI (Async)
 
-### FastAPI
-
-The full flow — register, login, protected route, refresh:
+The recommended setup for FastAPI — uses `async_login` with async SQLAlchemy:
 
 ```python
 import os
-from fastapi import FastAPI, Header, HTTPException, Response, Cookie
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Header, HTTPException, Response, Cookie, Depends
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from pydantic import BaseModel
 from gatevault import TokenManager, OAuthHandler, GateVault, hash_password
 from gatevault import (
@@ -846,27 +768,39 @@ tm = TokenManager(
     refresh_expiry_days=7
 )
 gate = GateVault(token_manager=tm)
-oauth = OAuthHandler(token_manager=tm, get_user=get_user_from_db)
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 
-class AuthRequest(BaseModel):
-    username: str
-    password: str
+# async get_user for use with async_login
+async def get_user(username: str, db: AsyncSession):
+    result = await db.execute(select(User).where(User.email == username))
+    return result.scalar_one_or_none()
 
 
 # Registration
 @app.post("/register")
-def register(body: AuthRequest):
+async def register(body: UserCreate, db: AsyncSession = Depends(get_db)):
     hashed = hash_password(body.password)
-    db.create_user(username=body.username, hashed_password=hashed)
+    new_user = User(email=body.email, hashed_password=hashed)
+    db.add(new_user)
+    await db.commit()
     return {"message": "registered"}
 
 
-# Login — access token in body, refresh token in httpOnly cookie
+# Login — async_login for async DB lookup
 @app.post("/login")
-def login(body: AuthRequest, response: Response):
+async def login(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    response: Response = None,
+    db: AsyncSession = Depends(get_db)
+):
+    async def _get_user(username: str):
+        return await get_user(username, db)
+
+    oauth = OAuthHandler(token_manager=tm, get_user=_get_user)
+
     try:
-        tokens = oauth.login(body.username, body.password)
+        tokens = await oauth.async_login(form_data.username, form_data.password)
     except (InvalidCredentialsError, UnauthorizedError):
         raise HTTPException(status_code=401, detail="invalid credentials")
 
@@ -877,40 +811,12 @@ def login(body: AuthRequest, response: Response):
         secure=True,
         samesite="strict"
     )
-    return {"access_token": tokens["access_token"]}
+    return {"access_token": tokens["access_token"], "token_type": "bearer"}
 
 
-# Protected functions — defined once
-@gate.protected
-def get_profile(payload=None):
-    return db.get_user(payload["user_id"])
-
-@gate.protected
-def get_orders(payload=None):
-    return db.get_orders(payload["user_id"])
-
-
-# Routes — extract token from Authorization header, pass to protected function
-@app.get("/profile")
-def profile(authorization: str = Header(...)):
-    token = authorization.replace("Bearer ", "")
-    try:
-        return get_profile(token=token)
-    except (GuardError, UnauthorizedError):
-        raise HTTPException(status_code=401, detail="unauthorized")
-
-@app.get("/orders")
-def orders(authorization: str = Header(...)):
-    token = authorization.replace("Bearer ", "")
-    try:
-        return get_orders(token=token)
-    except (GuardError, UnauthorizedError):
-        raise HTTPException(status_code=401, detail="unauthorized")
-
-
-# Refresh — refresh token comes from httpOnly cookie, not body
+# Token refresh
 @app.post("/refresh")
-def refresh(response: Response, refresh_token: str = Cookie(...)):
+async def refresh(response: Response, refresh_token: str = Cookie(...)):
     try:
         payload = tm.decode_token(refresh_token)
     except TokenExpiredError:
@@ -921,12 +827,8 @@ def refresh(response: Response, refresh_token: str = Cookie(...)):
     if payload["type"] != "refresh":
         raise HTTPException(status_code=400, detail="wrong token type")
 
-    db.revoke_refresh_token(refresh_token)
-
     new_access = tm.create_access_token(user_id=payload["user_id"])
     new_refresh = tm.create_refresh_token(user_id=payload["user_id"])
-
-    db.store_refresh_token(new_refresh, user_id=payload["user_id"])
 
     response.set_cookie(
         key="refresh_token",
@@ -938,14 +840,40 @@ def refresh(response: Response, refresh_token: str = Cookie(...)):
     return {"access_token": new_access}
 
 
-# Logout — clear the cookie
+# Logout
 @app.post("/logout")
 def logout(response: Response, refresh_token: str = Cookie(None)):
-    if refresh_token:
-        db.revoke_refresh_token(refresh_token)
     response.delete_cookie("refresh_token")
     return {"message": "logged out"}
 ```
+
+---
+
+### FastAPI (Sync)
+
+If you are using a synchronous database driver, use `login` instead:
+
+```python
+oauth = OAuthHandler(token_manager=tm, get_user=get_user_from_db)
+
+@app.post("/login")
+def login(form_data: OAuth2PasswordRequestForm = Depends(), response: Response = None):
+    try:
+        tokens = oauth.login(form_data.username, form_data.password)
+    except (InvalidCredentialsError, UnauthorizedError):
+        raise HTTPException(status_code=401, detail="invalid credentials")
+
+    response.set_cookie(
+        key="refresh_token",
+        value=tokens["refresh_token"],
+        httponly=True,
+        secure=True,
+        samesite="strict"
+    )
+    return {"access_token": tokens["access_token"], "token_type": "bearer"}
+```
+
+---
 
 ### Flask
 
@@ -969,21 +897,6 @@ gate = GateVault(token_manager=tm)
 oauth = OAuthHandler(token_manager=tm, get_user=get_user_from_db)
 
 
-def get_token_from_header():
-    auth = request.headers.get("Authorization", "")
-    return auth.replace("Bearer ", "")
-
-
-# Registration
-@app.post("/register")
-def register():
-    data = request.json
-    hashed = hash_password(data["password"])
-    db.create_user(username=data["username"], hashed_password=hashed)
-    return jsonify({"message": "registered"})
-
-
-# Login — access token in body, refresh token in httpOnly cookie
 @app.post("/login")
 def login():
     data = request.json
@@ -1001,119 +914,29 @@ def login():
         samesite="Strict"
     )
     return response
-
-
-# Protected functions — defined once
-@gate.protected
-def get_profile(payload=None):
-    return db.get_user(payload["user_id"])
-
-@gate.protected
-def get_orders(payload=None):
-    return db.get_orders(payload["user_id"])
-
-
-# Routes — extract token from Authorization header
-@app.get("/profile")
-def profile():
-    token = get_token_from_header()
-    try:
-        return jsonify(get_profile(token=token))
-    except (GuardError, UnauthorizedError):
-        return jsonify({"error": "unauthorized"}), 401
-
-@app.get("/orders")
-def orders():
-    token = get_token_from_header()
-    try:
-        return jsonify(get_orders(token=token))
-    except (GuardError, UnauthorizedError):
-        return jsonify({"error": "unauthorized"}), 401
-
-
-# Refresh — reads refresh token from httpOnly cookie
-@app.post("/refresh")
-def refresh():
-    refresh_token = request.cookies.get("refresh_token")
-    if not refresh_token:
-        return jsonify({"error": "no refresh token"}), 401
-
-    try:
-        payload = tm.decode_token(refresh_token)
-    except TokenExpiredError:
-        return jsonify({"error": "session expired"}), 401
-    except (InvalidTokenError, TokenDecodeError):
-        return jsonify({"error": "invalid token"}), 401
-
-    if payload["type"] != "refresh":
-        return jsonify({"error": "wrong token type"}), 400
-
-    db.revoke_refresh_token(refresh_token)
-
-    new_access = tm.create_access_token(user_id=payload["user_id"])
-    new_refresh = tm.create_refresh_token(user_id=payload["user_id"])
-
-    db.store_refresh_token(new_refresh, user_id=payload["user_id"])
-
-    response = make_response(jsonify({"access_token": new_access}))
-    response.set_cookie(
-        "refresh_token",
-        new_refresh,
-        httponly=True,
-        secure=True,
-        samesite="Strict"
-    )
-    return response
-
-
-# Logout
-@app.post("/logout")
-def logout():
-    refresh_token = request.cookies.get("refresh_token")
-    if refresh_token:
-        db.revoke_refresh_token(refresh_token)
-    response = make_response(jsonify({"message": "logged out"}))
-    response.delete_cookie("refresh_token")
-    return response
 ```
 
 ---
 
 ## Using gatevault in Parts
 
-You do not have to use the whole package. Each part is independent.
-
 ### Just Hashing
-
-No tokens, no guards — just bcrypt password management:
 
 ```python
 from gatevault import hash_password, verify_password
 
-# Registration
-hashed = hash_password("user_password")
-db.save_user(hashed_password=hashed)
+stored = hash_password("user_password")
 
-# Login
-user = db.get_user(username)
-if verify_password("user_password", user.hashed_password):
-    # authenticated — issue tokens however you like
-    pass
+if verify_password("user_password", stored):
+    print("access granted")
 else:
-    raise Exception("wrong password")
-
-# Password change
-new_hash = hash_password("new_password")
-db.update_password(user_id=user.id, hashed_password=new_hash)
+    print("access denied")
 ```
 
 ### Just Tokens
 
-Your own login flow, but JWT management handled by gatevault:
-
 ```python
 from gatevault import TokenManager
-from gatevault import TokenExpiredError, InvalidTokenError, TokenDecodeError
 
 tm = TokenManager(
     secret_key="your-very-secure-secret-key-32-bytes",
@@ -1121,63 +944,31 @@ tm = TokenManager(
     refresh_expiry_days=14
 )
 
-# issue tokens after your own auth check
-access = tm.create_access_token(user_id=1)
+access = tm.create_access_token(user_id=1, role="admin")
 refresh = tm.create_refresh_token(user_id=1)
 
-# embed extra claims
-access = tm.create_access_token(user_id=1, role="admin", plan="pro")
-
-# decode and verify
-try:
-    payload = tm.decode_token(access)
-    print(payload["user_id"])  # 1
-    print(payload["role"])     # "admin"
-    print(payload["type"])     # "access"
-except TokenExpiredError:
-    print("expired")
-except InvalidTokenError:
-    print("tampered")
-except TokenDecodeError:
-    print("malformed")
+payload = tm.decode_token(access)
+print(payload["user_id"])  # 1
+print(payload["role"])     # "admin"
+print(payload["type"])     # "access"
 ```
 
 ### Just Guards
 
-You already have tokens, you just want decorator-based protection:
-
 ```python
 from gatevault import TokenManager, GateVault
-from gatevault import GuardError, UnauthorizedError
 
-tm = TokenManager(
-    secret_key="your-very-secure-secret-key-32-bytes",
-    access_expiry_minutes=15,
-    refresh_expiry_days=7
-)
+tm = TokenManager(secret_key="...", access_expiry_minutes=15, refresh_expiry_days=7)
 gate = GateVault(token_manager=tm)
 
 @gate.protected
 def get_dashboard(payload=None):
-    return {"user_id": payload["user_id"], "role": payload.get("role")}
+    return {"user_id": payload["user_id"]}
 
-@gate.protected
-def admin_panel(payload=None):
-    if payload.get("role") != "admin":
-        raise UnauthorizedError("admins only")
-    return get_admin_data()
-
-@gate.protected
-def process_order(order_id: int, payload=None):
-    return db.process(order_id, user_id=payload["user_id"])
-
-# call with token from wherever you got it
 try:
     result = get_dashboard(token=incoming_token)
 except GuardError:
     return {"error": "unauthorized"}, 401
-except UnauthorizedError:
-    return {"error": "forbidden"}, 403
 ```
 
 ---
@@ -1186,21 +977,12 @@ except UnauthorizedError:
 
 gatevault creates tokens on demand but does not manage storage or invalidation — that lives in your application.
 
-### Why you need a refresh token store
-
-JWTs cannot be invalidated once issued. Without a store, a stolen refresh token is valid until it expires — potentially days. With a store, you can:
-
-- Revoke tokens on logout
-- Detect token reuse (a sign of theft)
-- Force re-login on password change or suspicious activity
-
 ### Full rotation pattern
 
 ```python
 from gatevault import TokenExpiredError, InvalidTokenError, TokenDecodeError
 
 def rotate_tokens(refresh_token: str):
-    # 1. Verify the refresh token
     try:
         payload = tm.decode_token(refresh_token)
     except TokenExpiredError:
@@ -1208,53 +990,21 @@ def rotate_tokens(refresh_token: str):
     except (InvalidTokenError, TokenDecodeError):
         return {"error": "invalid token"}, 401
 
-    # 2. Check it's actually a refresh token
     if payload["type"] != "refresh":
         return {"error": "wrong token type"}, 400
 
-    # 3. Check it hasn't already been used (reuse detection)
     if not db.is_refresh_token_valid(refresh_token):
-        # Token was already rotated — possible theft
-        # Revoke all tokens for this user and force re-login
         db.revoke_all_tokens_for_user(payload["user_id"])
         return {"error": "token reuse detected, please log in again"}, 401
 
-    # 4. Revoke the old refresh token
     db.revoke_refresh_token(refresh_token)
 
-    # 5. Issue new pair
     new_access = tm.create_access_token(user_id=payload["user_id"])
     new_refresh = tm.create_refresh_token(user_id=payload["user_id"])
 
-    # 6. Store the new refresh token
     db.store_refresh_token(new_refresh, user_id=payload["user_id"])
 
-    return {
-        "access_token": new_access,
-        "new_refresh_token": new_refresh
-    }
-```
-
-### Minimal refresh (no reuse detection)
-
-If you don't need reuse detection, here is the minimal version:
-
-```python
-def rotate_tokens(refresh_token: str):
-    try:
-        payload = tm.decode_token(refresh_token)
-    except TokenExpiredError:
-        return {"error": "session expired"}, 401
-    except (InvalidTokenError, TokenDecodeError):
-        return {"error": "invalid token"}, 401
-
-    if payload["type"] != "refresh":
-        return {"error": "wrong token type"}, 400
-
-    new_access = tm.create_access_token(user_id=payload["user_id"])
-    new_refresh = tm.create_refresh_token(user_id=payload["user_id"])
-
-    return {"access_token": new_access, "refresh_token": new_refresh}
+    return {"access_token": new_access, "new_refresh_token": new_refresh}
 ```
 
 ---
@@ -1266,7 +1016,7 @@ def rotate_tokens(refresh_token: str):
 - Use at least 32 bytes — gatevault warns you if you don't
 - Generate with: `python -c "import secrets; print(secrets.token_hex(32))"`
 - Store in an environment variable — never hardcode
-- Rotating invalidates all existing tokens immediately — only do it when necessary (breach, employee offboarding)
+- Rotating invalidates all existing tokens immediately
 
 ### Token storage on the client
 
@@ -1275,11 +1025,11 @@ def rotate_tokens(refresh_token: str):
 | Access token | Memory (JS variable) | Short-lived, not persisted, wiped on tab close |
 | Refresh token | httpOnly cookie | Can't be read by JavaScript — XSS safe |
 
-Never store tokens in `localStorage` — it is accessible to any JavaScript on the page, including injected scripts.
+Never store tokens in `localStorage`.
 
 ### What not to put in the payload
 
-The JWT payload is base64 encoded, not encrypted. Anyone with the token string can decode and read it. Keep it to identifiers and non-sensitive metadata:
+The JWT payload is base64 encoded, not encrypted. Keep it to identifiers and non-sensitive metadata:
 
 ```python
 # Fine
@@ -1289,24 +1039,9 @@ tm.create_access_token(user_id=42, role="admin", org_id=7)
 tm.create_access_token(user_id=42, email="john@example.com", password_hash="$2b$...")
 ```
 
-### Refresh token revocation
-
-Tokens cannot be invalidated once issued. For true revocation (logout, password change, suspicious activity), maintain a table of valid refresh tokens in your database:
-
-```sql
-CREATE TABLE refresh_tokens (
-    token TEXT PRIMARY KEY,
-    user_id INTEGER NOT NULL,
-    created_at TIMESTAMP DEFAULT NOW(),
-    expires_at TIMESTAMP NOT NULL
-);
-```
-
-On every refresh request, check the token exists in this table before issuing a new pair. On logout or password change, delete the row.
-
 ### Login enumeration
 
-Return the same error for "user not found" and "wrong password". Distinguishing them tells an attacker which usernames exist:
+Return the same error for "user not found" and "wrong password":
 
 ```python
 # Good
@@ -1316,8 +1051,6 @@ except (InvalidCredentialsError, UnauthorizedError):
 # Bad — tells attacker the username is valid
 except InvalidCredentialsError:
     return {"error": "user not found"}, 404
-except UnauthorizedError:
-    return {"error": "wrong password"}, 401
 ```
 
 ---
@@ -1345,11 +1078,12 @@ except UnauthorizedError:
 | Parameter | Type | Description |
 |---|---|---|
 | `token_manager` | `TokenManager` | Configured TokenManager instance. |
-| `get_user` | `Callable[[str], Any \| None]` | Lookup function. Must return object with `id` and `hashed_password`, or `None`. |
+| `get_user` | `Callable[[str], Any \| None]` | Lookup function. Sync or async. Must return object with `id` and `hashed_password`, or `None`. |
 
 | Method | Returns | Description |
 |---|---|---|
-| `login(username, password)` | `dict` | Authenticates user. Returns `{"access_token", "refresh_token", "token_type"}`. |
+| `login(username, password)` | `dict` | Authenticates user synchronously. Returns `{"access_token", "refresh_token", "token_type"}`. |
+| `async_login(username, password)` | `Coroutine[dict]` | Authenticates user asynchronously — use when `get_user` is `async def`. Must be called with `await`. |
 
 ---
 
@@ -1367,20 +1101,11 @@ except UnauthorizedError:
 
 ### `hash_password(plain) -> str`
 
-| Parameter | Type | Description |
-|---|---|---|
-| `plain` | `str` | Plain text password. Encoding is handled internally. |
-
 Returns bcrypt hash string. Raises `HashingError` on unexpected failure.
 
 ---
 
 ### `verify_password(plain, hashed) -> bool`
-
-| Parameter | Type | Description |
-|---|---|---|
-| `plain` | `str` | Plain text password to check. |
-| `hashed` | `str` | Stored bcrypt hash. |
 
 Returns `True` if match, `False` otherwise. Never raises on wrong password.
 
@@ -1392,13 +1117,17 @@ Returns `True` if match, `False` otherwise. Never raises on wrong password.
 
 Tying gatevault to FastAPI or Flask would limit who can use it. Auth logic — hashing, signing, verifying — has nothing to do with HTTP. Pure Python means it works anywhere.
 
+**Both sync and async login**
+
+`async_login` was added to support async ORMs like async SQLAlchemy without requiring a separate library or workaround. The two methods are intentionally separate — calling the wrong one for your `get_user` type fails loudly rather than silently returning a coroutine instead of a user.
+
 **Class-based `TokenManager`**
 
-The secret key and expiry settings are configuration — they belong on an instance, not passed into every function call. Configure once at startup, use everywhere without threading arguments through every call.
+The secret key and expiry settings are configuration — they belong on an instance, not passed into every function call. Configure once at startup, use everywhere.
 
 **Shared `TokenManager` across `OAuthHandler` and `GateVault`**
 
-`OAuthHandler` creates tokens. `GateVault` verifies them. They don't communicate directly — the shared `TokenManager` instance is the trust anchor. Same secret key in, same secret key out.
+`OAuthHandler` creates tokens. `GateVault` verifies them. The shared `TokenManager` instance is the trust anchor — same secret key in, same secret key out.
 
 **Payload injected as a keyword argument**
 
@@ -1406,25 +1135,20 @@ The secret key and expiry settings are configuration — they belong on an insta
 
 **Wrapping third-party exceptions**
 
-`PyJWT` and `bcrypt` exceptions never surface through the gatevault API. Consumers only need to know gatevault exceptions. If an underlying library changes exception names in a future version, only gatevault updates.
+`PyJWT` and `bcrypt` exceptions never surface through the gatevault API. Consumers only need to know gatevault exceptions.
 
 **`verify_password` returns bool, not raises**
 
-A wrong password is an expected outcome, not an exceptional one. The caller decides whether to raise, log, increment a failed attempt counter, or something else entirely.
-
-**`OAuthHandler.login` returns both tokens**
-
-The server decides how to deliver each token to the client — access token in the body, refresh token in an httpOnly cookie. Returning both from `login` gives the framework integration layer that flexibility.
+A wrong password is an expected outcome, not an exceptional one. The caller decides whether to raise, log, or increment a failed attempt counter.
 
 ---
 
 ## Known Limitations
 
 - Refresh token invalidation is not built in — you need a database or cache to track and revoke issued refresh tokens
-- Only HS256 (symmetric signing) is supported — RS256 (asymmetric keypair) is not yet available
-- `GateVault.protected` expects `token` as a keyword argument — you may need a thin adapter in frameworks with unusual request injection patterns
+- Only HS256 (symmetric signing) is supported — RS256 is not yet available
+- `GateVault.protected` is synchronous only — async route protection is on the roadmap
 - No built-in rate limiting on login attempts — implement at the application or infrastructure level
-- No async support — all methods are synchronous. Async wrappers are on the roadmap
 
 ---
 
@@ -1432,7 +1156,7 @@ The server decides how to deliver each token to the client — access token in t
 
 - RS256 support for asymmetric key signing
 - Built-in token blocklist interface for revocation
-- Async-compatible versions of all methods (`async def`)
+- Async `GateVault.protected` decorator for async route functions
 - Role-based access control helpers on `GateVault`
 - FastAPI and Flask integration packages as optional extras
 
