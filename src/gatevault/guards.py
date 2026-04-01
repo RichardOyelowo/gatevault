@@ -1,3 +1,4 @@
+import inspect
 from functools import wraps
 from .tokens import TokenManager
 from .exceptions import GuardError, UnauthorizedError, TokenDecodeError, TokenExpiredError, InvalidTokenError
@@ -72,4 +73,22 @@ class GateVault:
             except InvalidTokenError:
                 raise UnauthorizedError("Invalid token")
             return f(*args, payload=payload, **kwargs)
+
+        @wraps(f)
+        async def async_decorated_function(token = None, *args, **kwargs):
+            if not token:
+                raise GuardError("No token provided")
+            try:
+                payload = self.token_manager.decode_token(token)
+            except TokenDecodeError:
+                raise GuardError("Unable to decode token")
+            except TokenExpiredError:
+                raise GuardError("Token has expired")
+            except InvalidTokenError:
+                raise UnauthorizedError("Invalid token")
+            return await f(*args, payload=payload, **kwargs)
+
+        if inspect.iscoroutinefunction(f):
+            return async_decorated_function
+
         return decorated_function
