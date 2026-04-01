@@ -7,7 +7,7 @@ packages = ["src/gatevault"]
 
 [project]
 name = "richard-gatevault"
-version = "1.0.2"
+version = "1.0.3"
 description = "A Python auth library that handles JWT token management, password hashing, OAuth2 login flow, and route protection — so you don't have to wire it together yourself."
 requires-python = ">=3.9"
 dependencies = ["PyJWT", "bcrypt"]
