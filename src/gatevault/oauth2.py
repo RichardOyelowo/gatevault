@@ -10,18 +10,32 @@ class OAuthHandler:
     generation into a single login handler. It follows the OAuth2 Resource
     Owner Password Credentials flow.
 
+    Supports both synchronous and asynchronous user lookup via ``login``
+    and ``async_login`` respectively. Use ``async_login`` when your ``get_user``
+    function is a coroutine (e.g. async SQLAlchemy queries).
+
     Args:
         token_manager: A configured TokenManager instance used to create
                        access and refresh tokens.
         get_user: A callable that accepts a username string and returns a
                   user object with ``id`` and ``hashed_password`` attributes,
-                  or None if the user does not exist.
+                  or None if the user does not exist. Can be sync or async
+                  depending on which login method you use.
 
-    Example::
+    Example (sync)::
 
         tm = TokenManager(secret_key="...", access_expiry_minutes=15, refresh_expiry_days=7)
         handler = OAuthHandler(token_manager=tm, get_user=get_user_from_db)
         tokens = handler.login("john@example.com", "mypassword")
+
+    Example (async)::
+
+        async def get_user(username: str):
+            result = await db.execute(select(User).where(User.email == username))
+            return result.scalar_one_or_none()
+
+        handler = OAuthHandler(token_manager=tm, get_user=get_user)
+        tokens = await handler.async_login("john@example.com", "mypassword")
     """
 
     def __init__(self, token_manager: TokenManager, get_user) -> None:
@@ -31,8 +45,9 @@ class OAuthHandler:
     def login(self, username: str, password: str) -> dict:
         """Authenticate a user and return access and refresh tokens.
 
-        Looks up the user by username, verifies the provided password against
-        the stored hash, then issues a new access and refresh token pair.
+        Looks up the user by username using a synchronous ``get_user`` callable,
+        verifies the provided password against the stored hash, then issues a
+        new access and refresh token pair.
 
         Args:
             username: The user's username or email address.
@@ -52,10 +67,8 @@ class OAuthHandler:
         user = self.get_user(username)
         if not user:
             raise InvalidCredentialsError("no user found")
-
         if not verify_password(password, user.hashed_password):
             raise UnauthorizedError("user password mismatched")
-
         try:
             data = {
                 "access_token": self.token_manager.create_access_token(user.id),
@@ -64,5 +77,41 @@ class OAuthHandler:
             }
         except Exception as e:
             raise GuardError("invalid user id or token_manager error") from e
+        return data
 
+    async def async_login(self, username: str, password: str) -> dict:
+        """Authenticate a user asynchronously and return access and refresh tokens.
+
+        Identical to ``login`` but awaits ``get_user``, making it compatible
+        with async database queries (e.g. async SQLAlchemy with asyncpg).
+        Use this method when your ``get_user`` function is defined as ``async def``.
+
+        Args:
+            username: The user's username or email address.
+            password: The plain text password provided by the user.
+
+        Returns:
+            A dictionary containing:
+                - ``access_token``: A short-lived JWT for authenticating requests.
+                - ``refresh_token``: A long-lived JWT for obtaining new access tokens.
+                - ``token_type``: Always ``"bearer"``.
+
+        Raises:
+            InvalidCredentialsError: If no user is found with the given username.
+            UnauthorizedError: If the password does not match the stored hash.
+            GuardError: If token creation fails unexpectedly.
+        """
+        user = await self.get_user(username)
+        if not user:
+            raise InvalidCredentialsError("no user found")
+        if not verify_password(password, user.hashed_password):
+            raise UnauthorizedError("user password mismatched")
+        try:
+            data = {
+                "access_token": self.token_manager.create_access_token(user.id),
+                "refresh_token": self.token_manager.create_refresh_token(user.id),
+                "token_type": "bearer"
+            }
+        except Exception as e:
+            raise GuardError("invalid user id or token_manager error") from e
         return data
