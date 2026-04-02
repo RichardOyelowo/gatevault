@@ -81,7 +81,7 @@ async def async_get_info(payload=None):
     return payload
 
 
-
+@pytest.mark.asyncio
 async def test_valid_token_async():
     # if access tokens works, refresh tokens should
     tokens = await async_handler.async_login("Richard", "richard's-password")
@@ -93,11 +93,13 @@ async def test_valid_token_async():
     assert payload.get("type") == "access"
 
 
+@pytest.mark.asyncio
 async def test_missing_token_async():
     with pytest.raises(GuardError):
         payload = await async_get_info()
 
 
+@pytest.mark.asyncio
 async def test_expired_token_async():
     tz = TokenManager("this-should-be-at-least-32bytes-long-for-security", 0, 0)
     async_handler = OAuthHandler(tz, async_get_user)
@@ -114,6 +116,7 @@ async def test_expired_token_async():
         payload = await async_get_info(token=acess_token)
 
 
+@pytest.mark.asyncio
 async def test_tampered_token_async():
     tokens = await async_handler.async_login("Richard", "richard's-password")
     acess_token = tokens["access_token"]
@@ -122,6 +125,7 @@ async def test_tampered_token_async():
         payload = await async_get_info(token=acess_token + "added_error")
 
 
+@pytest.mark.asyncio
 async def test_malformed_token_async():
     with pytest.raises(GuardError):
         payload = await async_get_info(token="this_is-an-invalid-token-for-testing")
