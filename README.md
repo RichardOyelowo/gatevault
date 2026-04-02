@@ -1,4 +1,4 @@
- # <img src="images/brown_logo.svg">
+# <img src="images/brown_logo.png">
 
 <p align="center">
   <a href="https://pypi.org/project/richard-gatevault/"><img src="https://img.shields.io/pypi/v/richard-gatevault?color=8B4513&label=pypi&style=flat-square"></a>
@@ -31,6 +31,7 @@ pip install richard-gatevault
 ## Table of Contents
 
 - [Installation](#installation)
+- [Quick Start](#quick-start)
 - [The Full Picture](#the-full-picture)
 - [Password Hashing](#password-hashing)
 - [Token Management](#token-management)
@@ -47,6 +48,8 @@ pip install richard-gatevault
   - [FastAPI (Sync)](#fastapi-sync)
   - [Flask](#flask)
   - [Django](#django)
+    - [Django REST Framework](#django-rest-framework)
+    - [Async Django Views](#async-django-views-django-41)
 - [Using gatevault in Parts](#using-gatevault-in-parts)
   - [Just Hashing](#just-hashing)
   - [Just Tokens](#just-tokens)
@@ -81,6 +84,58 @@ from gatevault import (
     verify_password,
 )
 ```
+
+---
+
+## Quick Start
+
+The fastest path from zero to a working auth setup. This assumes a sync database — swap `login` for `async_login` and add `async def` if you're using an async ORM.
+
+```python
+import os
+from gatevault import TokenManager, OAuthHandler, GateVault, hash_password
+from gatevault import InvalidCredentialsError, UnauthorizedError, GuardError
+
+# 1. Initialize once at startup
+tm = TokenManager(
+    secret_key=os.environ["AUTH_SECRET_KEY"],
+    access_expiry_minutes=15,
+    refresh_expiry_days=7
+)
+gate = GateVault(token_manager=tm)
+oauth = OAuthHandler(token_manager=tm, get_user=lambda u: db.get_user(u))
+
+# 2. Hash passwords at registration
+hashed = hash_password(plain_password)
+db.save_user(email=email, hashed_password=hashed)
+
+# 3. Login returns tokens
+tokens = oauth.login(email, password)
+# → {"access_token": "eyJ...", "refresh_token": "eyJ...", "token_type": "bearer"}
+
+# 4. Protect any function with a decorator
+@gate.protected
+def get_profile(payload=None):
+    return db.get_user(payload["user_id"])
+
+# Works on async functions too
+@gate.protected
+async def get_profile_async(payload=None):
+    return await db.get_user(payload["user_id"])
+
+# 5. Call the protected function with the token
+result = get_profile(token=access_token)
+result = await get_profile_async(token=access_token)
+```
+
+### Choosing the right method
+
+| Situation | Use |
+|---|---|
+| Sync database (Django ORM, SQLAlchemy sync) | `oauth.login(...)` |
+| Async database (async SQLAlchemy, asyncpg) | `await oauth.async_login(...)` |
+| Protecting a regular function | `@gate.protected` + `def` |
+| Protecting an async route/function | `@gate.protected` + `async def` |
 
 ---
 
@@ -805,7 +860,16 @@ warnings.filterwarnings("error", category=ShortKeyWarning)
 
 ## Framework Integration
 
-gatevault is framework-agnostic. The same library works in FastAPI, Flask, and Django — you just wire it into each framework's request/response cycle.
+gatevault is framework-agnostic. The same library works across FastAPI, Flask, and Django — you wire it into each framework's request/response cycle in the same way: initialize once at startup, define protected functions with `@gate.protected`, and pass the token from the `Authorization` header into the protected function at request time.
+
+| Framework | Recommended login method | Async support |
+|---|---|---|
+| FastAPI + async SQLAlchemy | `async_login` | Full — use `async def` protected functions |
+| FastAPI + sync DB | `login` | N/A |
+| Flask | `login` | Not applicable (Flask is sync) |
+| Django (sync ORM) | `login` | N/A |
+| Django 4.1+ async views | `async_login` | Full — use `async def` protected functions |
+| Django REST Framework | `login` | N/A |
 
 ---
 
@@ -1073,7 +1137,11 @@ def logout():
 
 ### Django
 
-gatevault works with Django's sync ORM out of the box. Use `login` with a sync `get_user`. For Django with async views (Django 4.1+), use `async_login` with an async `get_user`.
+gatevault works with Django's sync ORM out of the box. Use `login` with a sync `get_user`. For async views (Django 4.1+), use `async_login` with an async `get_user`.
+
+#### Setup — `auth/gatevault_setup.py`
+
+Create a dedicated setup file and import from it across your views. This avoids reinitializing gatevault objects on every request.
 
 ```python
 # auth/gatevault_setup.py
@@ -1087,6 +1155,7 @@ tm = TokenManager(
 )
 gate = GateVault(token_manager=tm)
 
+
 def get_user_from_db(username: str):
     from myapp.models import User
     try:
@@ -1094,66 +1163,219 @@ def get_user_from_db(username: str):
     except User.DoesNotExist:
         return None
 
+
 oauth = OAuthHandler(token_manager=tm, get_user=get_user_from_db)
 ```
 
+#### Views — `auth/views.py`
+
 ```python
-# auth/views.py
 import json
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_POST, require_GET
 from gatevault import hash_password
-from gatevault import InvalidCredentialsError, UnauthorizedError, GuardError
+from gatevault import (
+    InvalidCredentialsError, UnauthorizedError,
+    GuardError, TokenExpiredError, InvalidTokenError, TokenDecodeError
+)
 from .gatevault_setup import tm, oauth, gate
 from .models import User
 
 
+# Protected functions — defined once, called from any view
 @gate.protected
 def get_current_profile(payload=None):
     return User.objects.get(id=payload["user_id"])
 
 
+# Registration
 @csrf_exempt
+@require_POST
 def register(request):
-    if request.method != "POST":
-        return JsonResponse({"error": "method not allowed"}, status=405)
     data = json.loads(request.body)
     hashed = hash_password(data["password"])
     User.objects.create(email=data["email"], hashed_password=hashed)
-    return JsonResponse({"message": "registered"})
+    return JsonResponse({"message": "registered"}, status=201)
 
 
+# Login
 @csrf_exempt
+@require_POST
 def login(request):
-    if request.method != "POST":
-        return JsonResponse({"error": "method not allowed"}, status=405)
     data = json.loads(request.body)
     try:
         tokens = oauth.login(data["username"], data["password"])
     except (InvalidCredentialsError, UnauthorizedError):
         return JsonResponse({"error": "invalid credentials"}, status=401)
 
-    response = JsonResponse({"access_token": tokens["access_token"]})
+    response = JsonResponse({"access_token": tokens["access_token"], "token_type": "bearer"})
     response.set_cookie(
         "refresh_token",
         tokens["refresh_token"],
         httponly=True,
-        secure=True,
+        secure=True,        # set to False in local development
         samesite="Strict"
     )
     return response
 
 
+# Protected route — extract token from header, pass to protected function
+@require_GET
 def profile(request):
     token = request.headers.get("Authorization", "").replace("Bearer ", "")
     try:
         user = get_current_profile(token=token)
         return JsonResponse({"id": user.id, "email": user.email})
-    except (GuardError, UnauthorizedError):
+    except GuardError:
         return JsonResponse({"error": "unauthorized"}, status=401)
+    except UnauthorizedError:
+        return JsonResponse({"error": "forbidden"}, status=403)
+
+
+# Token refresh — reads refresh token from httpOnly cookie
+@csrf_exempt
+@require_POST
+def refresh(request):
+    refresh_token = request.COOKIES.get("refresh_token")
+    if not refresh_token:
+        return JsonResponse({"error": "no refresh token"}, status=401)
+
+    try:
+        payload = tm.decode_token(refresh_token)
+    except TokenExpiredError:
+        return JsonResponse({"error": "session expired"}, status=401)
+    except (InvalidTokenError, TokenDecodeError):
+        return JsonResponse({"error": "invalid token"}, status=401)
+
+    if payload["type"] != "refresh":
+        return JsonResponse({"error": "wrong token type"}, status=400)
+
+    new_access = tm.create_access_token(user_id=payload["user_id"])
+    new_refresh = tm.create_refresh_token(user_id=payload["user_id"])
+
+    response = JsonResponse({"access_token": new_access})
+    response.set_cookie(
+        "refresh_token", new_refresh,
+        httponly=True, secure=True, samesite="Strict"
+    )
+    return response
+
+
+# Logout — clear the refresh token cookie
+@csrf_exempt
+@require_POST
+def logout(request):
+    response = JsonResponse({"message": "logged out"})
+    response.delete_cookie("refresh_token")
+    return response
 ```
 
-> Django REST Framework users can wrap the same `gate.protected` functions inside DRF views or APIViews — the pattern is identical. Just extract the token from `request.auth` or the `Authorization` header and pass it to the protected function.
+#### URL configuration — `auth/urls.py`
+
+```python
+from django.urls import path
+from . import views
+
+urlpatterns = [
+    path("register/", views.register),
+    path("login/", views.login),
+    path("refresh/", views.refresh),
+    path("logout/", views.logout),
+    path("profile/", views.profile),
+]
+```
+
+#### Django REST Framework
+
+If you are using DRF, the same `gate.protected` functions work inside `APIView` or `@api_view` — extract the token from the `Authorization` header and pass it in:
+
+```python
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from rest_framework import status
+from gatevault import GuardError, UnauthorizedError
+from .gatevault_setup import gate
+
+
+@gate.protected
+def get_current_profile(payload=None):
+    from myapp.models import User
+    return User.objects.get(id=payload["user_id"])
+
+
+@api_view(["GET"])
+def profile(request):
+    token = request.headers.get("Authorization", "").replace("Bearer ", "")
+    try:
+        user = get_current_profile(token=token)
+        return Response({"id": user.id, "email": user.email})
+    except GuardError:
+        return Response({"error": "unauthorized"}, status=status.HTTP_401_UNAUTHORIZED)
+    except UnauthorizedError:
+        return Response({"error": "forbidden"}, status=status.HTTP_403_FORBIDDEN)
+```
+
+You can also use `APIView` for class-based views:
+
+```python
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+
+
+class ProfileView(APIView):
+    def get(self, request):
+        token = request.headers.get("Authorization", "").replace("Bearer ", "")
+        try:
+            user = get_current_profile(token=token)
+            return Response({"id": user.id, "email": user.email})
+        except (GuardError, UnauthorizedError):
+            return Response({"error": "unauthorized"}, status=status.HTTP_401_UNAUTHORIZED)
+```
+
+#### Async Django views (Django 4.1+)
+
+For async Django views, define an async `get_user` and use `async_login`:
+
+```python
+# auth/gatevault_setup.py — async variant
+from django.contrib.auth import get_user_model
+
+async def get_user_async(username: str):
+    User = get_user_model()
+    try:
+        return await User.objects.aget(email=username)
+    except User.DoesNotExist:
+        return None
+
+oauth_async = OAuthHandler(token_manager=tm, get_user=get_user_async)
+```
+
+```python
+# auth/views.py — async login view
+import json
+from django.http import JsonResponse
+from .gatevault_setup import oauth_async
+from gatevault import InvalidCredentialsError, UnauthorizedError
+
+
+async def login_async(request):
+    if request.method != "POST":
+        return JsonResponse({"error": "method not allowed"}, status=405)
+    data = json.loads(request.body)
+    try:
+        tokens = await oauth_async.async_login(data["username"], data["password"])
+    except (InvalidCredentialsError, UnauthorizedError):
+        return JsonResponse({"error": "invalid credentials"}, status=401)
+
+    response = JsonResponse({"access_token": tokens["access_token"], "token_type": "bearer"})
+    response.set_cookie(
+        "refresh_token", tokens["refresh_token"],
+        httponly=True, secure=True, samesite="Strict"
+    )
+    return response
+```
 
 ---
 
