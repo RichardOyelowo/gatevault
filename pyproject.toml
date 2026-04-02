@@ -5,10 +5,13 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/gatevault"]
 
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
 [project]
 name = "richard-gatevault"
 version = "1.0.3"
-description = "A Python auth library that handles JWT token management, password hashing, OAuth2 login flow, and route protection — so you don't have to wire it together yourself."
+description = "A Python auth library that handles JWT token management, password hashing, OAuth2 login flow, and route protection — with full sync and async support — so you don't have to wire it together yourself."
 requires-python = ">=3.9"
 dependencies = ["PyJWT", "bcrypt"]
 readme = "README.md"
@@ -25,6 +28,10 @@ classifiers = [
     "Topic :: Security",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio"]
+
 [project.urls]
 Homepage = "https://github.com/RichardOyelowo/gatevault"
 Repository = "https://github.com/RichardOyelowo/gatevault"
+Documentation = "https://github.com/RichardOyelowo/gatevault?tab=readme-ov-file#table-of-contents"
