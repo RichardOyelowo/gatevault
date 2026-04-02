@@ -22,6 +22,7 @@ A Python auth library that handles JWT token management, password hashing, OAuth
 
 Most auth libraries do one thing. `PyJWT` gives you JWT encoding. `bcrypt` gives you password hashing. You still have to write the login flow, build the guards, handle the exceptions, and repeat that boilerplate across every project. gatevault wraps all of it into one coherent package with a clean API you can drop into any Python project regardless of framework — whether you're using FastAPI with async SQLAlchemy, Flask with a sync ORM, or Django with its built-in ORM.
 
+
 ```bash
 pip install richard-gatevault
 ```
