@@ -10,7 +10,7 @@ asyncio_mode = "auto"
 
 [project]
 name = "richard-gatevault"
-version = "1.0.3"
+version = "1.0.4"
 description = "A Python auth library that handles JWT token management, password hashing, OAuth2 login flow, and route protection — with full sync and async support — so you don't have to wire it together yourself."
 requires-python = ">=3.9"
 dependencies = ["PyJWT", "bcrypt"]
