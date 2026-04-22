@@ -18,9 +18,9 @@
 
 ---
 
-A Python auth library that handles JWT token management, password hashing, OAuth2 login flow, and route protection — with full sync and async support — so you don't have to wire it together yourself.
+A Python auth library that handles JWT token management, password hashing, OAuth2 login flow, and route protection with full sync and async support so you don't have to wire it together yourself.
 
-Most auth libraries do one thing. `PyJWT` gives you JWT encoding. `bcrypt` gives you password hashing. You still have to write the login flow, build the guards, handle the exceptions, and repeat that boilerplate across every project. gatevault wraps all of it into one coherent package with a clean API you can drop into any Python project regardless of framework — whether you're using FastAPI with async SQLAlchemy, Flask with a sync ORM, or Django with its built-in ORM.
+Most auth libraries do one thing. `PyJWT` gives you JWT encoding. `bcrypt` gives you password hashing. You still have to write the login flow, build the guards, handle the exceptions, and repeat that boilerplate across every project. gatevault wraps all of it into one coherent package with a clean API you can drop into any Python project regardless of framework whether you're using FastAPI with async SQLAlchemy, Flask with a sync ORM, or Django with its built-in ORM.
 
 
 ```bash
@@ -72,7 +72,7 @@ pip install richard-gatevault
 pip install richard-gatevault
 ```
 
-Requires Python 3.9+. Dependencies `PyJWT` and `bcrypt` are installed automatically — no extra setup needed.
+Requires Python 3.9+. Dependencies `PyJWT` and `bcrypt` are installed automatically no extra setup needed.
 
 Everything in gatevault is importable from the top level:
 
@@ -90,7 +90,7 @@ from gatevault import (
 
 ## Quick Start
 
-The fastest path from zero to a working auth setup. This assumes a sync database — swap `login` for `async_login` and add `async def` if you're using an async ORM.
+The fastest path from zero to a working auth setup. This assumes a sync database swap `login` for `async_login` and add `async def` if you're using an async ORM.
 
 ```python
 import os
@@ -142,7 +142,7 @@ result = await get_profile_async(token=access_token)
 
 ## The Full Picture
 
-Here is what a complete auth setup looks like end to end — registration, login, token storage, protected routes, and token refresh.
+Here is what a complete auth setup looks like end to end registration, login, token storage, protected routes, and token refresh.
 
 This example uses `async_login` and `async def` protected routes for an async SQLAlchemy setup. If you are using a synchronous database, replace `async_login` with `login`, `async def` protected functions with regular `def`, and remove the `async`/`await` keywords from the login route.
 
@@ -156,7 +156,7 @@ from gatevault import (
 )
 
 # ---------------------------------------------------------------------------
-# Setup — do this once at app startup
+# Setup do this once at app startup
 # ---------------------------------------------------------------------------
 
 tm = TokenManager(
@@ -169,7 +169,7 @@ gate = GateVault(token_manager=tm)
 
 
 # ---------------------------------------------------------------------------
-# get_user — async version for use with async_login
+# get_user async version for use with async_login
 # ---------------------------------------------------------------------------
 
 async def get_user(username: str):
@@ -180,7 +180,7 @@ oauth = OAuthHandler(token_manager=tm, get_user=get_user)
 
 
 # ---------------------------------------------------------------------------
-# Registration — hash and store the password, never store plain text
+# Registration hash and store the password, never store plain text
 # ---------------------------------------------------------------------------
 
 async def register(username: str, plain_password: str):
@@ -190,9 +190,9 @@ async def register(username: str, plain_password: str):
 
 
 # ---------------------------------------------------------------------------
-# Login — uses async_login since get_user is async
+# Login uses async_login since get_user is async
 # Access token goes in the response body.
-# Refresh token goes in an httpOnly cookie — never in the body.
+# Refresh token goes in an httpOnly cookie never in the body.
 # ---------------------------------------------------------------------------
 
 async def login(username: str, password: str, response):
@@ -212,7 +212,7 @@ async def login(username: str, password: str, response):
 
 
 # ---------------------------------------------------------------------------
-# Protected functions — gatevault.protected works on both sync and async
+# Protected functions gatevault.protected works on both sync and async
 # ---------------------------------------------------------------------------
 
 @gate.protected
@@ -227,7 +227,7 @@ def get_orders(payload=None):
 
 
 # ---------------------------------------------------------------------------
-# Token refresh — client sends the refresh token via httpOnly cookie
+# Token refresh client sends the refresh token via httpOnly cookie
 # Server issues a new access token
 # ---------------------------------------------------------------------------
 
@@ -256,7 +256,7 @@ async def refresh_route(refresh_token: str):
 
 ## Password Hashing
 
-gatevault uses bcrypt for password hashing. Passwords are one-way hashed — there is no way to reverse a hash back to the original password. If your database is ever compromised, attackers get hashes, not passwords.
+gatevault uses bcrypt for password hashing. Passwords are one-way hashed there is no way to reverse a hash back to the original password. If your database is ever compromised, attackers get hashes, not passwords.
 
 ### Hashing a password
 
@@ -286,7 +286,7 @@ is_match = verify_password("user_plain_password", stored_hash)
 # True or False
 ```
 
-`verify_password` returns a boolean. It never raises on a wrong password — it just returns `False`. What you do with that result is your decision.
+`verify_password` returns a boolean. It never raises on a wrong password it just returns `False`. What you do with that result is your decision.
 
 ```python
 from gatevault import verify_password, InvalidCredentialsError, UnauthorizedError
@@ -302,13 +302,13 @@ def authenticate(username: str, plain_password: str):
 
 ### About bcrypt salting
 
-You do not need to manage salts yourself. bcrypt generates a unique random salt for every hash and embeds it in the output string. Two calls to `hash_password` with the same password produce different hashes — both are valid.
+You do not need to manage salts yourself. bcrypt generates a unique random salt for every hash and embeds it in the output string. Two calls to `hash_password` with the same password produce different hashes both are valid.
 
 ```python
 h1 = hash_password("same_password")
 h2 = hash_password("same_password")
 
-print(h1 == h2)                             # False — different salts
+print(h1 == h2)                             # False different salts
 print(verify_password("same_password", h1)) # True
 print(verify_password("same_password", h2)) # True
 print(verify_password("wrong", h1))         # False
@@ -333,7 +333,7 @@ else:
 
 ## Token Management
 
-`TokenManager` handles all JWT creation and verification. It is the core of gatevault — `OAuthHandler` uses it to create tokens and `GateVault` uses it to verify them. Create one instance at startup and share it across your app.
+`TokenManager` handles all JWT creation and verification. It is the core of gatevault `OAuthHandler` uses it to create tokens and `GateVault` uses it to verify them. Create one instance at startup and share it across your app.
 
 ### Setup
 
@@ -348,7 +348,7 @@ tm = TokenManager(
 )
 ```
 
-The `secret_key` is what signs your tokens. Anyone with this key can forge valid tokens — keep it in an environment variable, never in source code.
+The `secret_key` is what signs your tokens. Anyone with this key can forge valid tokens keep it in an environment variable, never in source code.
 
 To generate a secure key:
 
@@ -363,11 +363,11 @@ access_token = tm.create_access_token(user_id=42)
 refresh_token = tm.create_refresh_token(user_id=42)
 ```
 
-Access tokens are short-lived (minutes) — sent with every authenticated request. Refresh tokens are long-lived (days) — used only to obtain a new access token when the current one expires.
+Access tokens are short-lived (minutes) sent with every authenticated request. Refresh tokens are long-lived (days) used only to obtain a new access token when the current one expires.
 
 ### Extra claims
 
-You can embed additional data in the token payload using keyword arguments. This is useful for role-based access control — you can check the role from the token itself without a database lookup on every request:
+You can embed additional data in the token payload using keyword arguments. This is useful for role-based access control you can check the role from the token itself without a database lookup on every request:
 
 ```python
 access_token = tm.create_access_token(user_id=42, role="admin", org_id=7)
@@ -409,19 +409,19 @@ from gatevault import TokenExpiredError, InvalidTokenError, TokenDecodeError
 try:
     payload = tm.decode_token(token)
 except TokenExpiredError:
-    # token has passed its exp time — send client to refresh endpoint
+    # token has passed its exp time send client to refresh endpoint
     return {"error": "token expired"}, 401
 except InvalidTokenError:
-    # signature mismatch — token was tampered with
+    # signature mismatch token was tampered with
     return {"error": "invalid token"}, 401
 except TokenDecodeError:
-    # token string is malformed — can't be parsed at all
+    # token string is malformed can't be parsed at all
     return {"error": "malformed token"}, 400
 ```
 
-### Access vs refresh — telling them apart
+### Access vs refresh telling them apart
 
-Every token carries a `type` claim. Always check it on your refresh endpoint — you only want refresh tokens there:
+Every token carries a `type` claim. Always check it on your refresh endpoint you only want refresh tokens there:
 
 ```python
 payload = tm.decode_token(token)
@@ -432,7 +432,7 @@ if payload["type"] != "refresh":
 
 ### TokenManager is shared
 
-`OAuthHandler` creates tokens. `GateVault` verifies them. They don't communicate directly — the shared `TokenManager` instance is the trust anchor. Same secret key in, same secret key out.
+`OAuthHandler` creates tokens. `GateVault` verifies them. They don't communicate directly the shared `TokenManager` instance is the trust anchor. Same secret key in, same secret key out.
 
 ```python
 tm = TokenManager(secret_key=os.environ["AUTH_SECRET_KEY"], access_expiry_minutes=15, refresh_expiry_days=7)
@@ -447,7 +447,7 @@ gate = GateVault(token_manager=tm)                          # uses tm to verify 
 
 `OAuthHandler` wires together user lookup, password verification, and token creation into one call. It follows the OAuth2 Resource Owner Password Credentials flow.
 
-It supports both **synchronous** and **asynchronous** user lookup — use `login` for sync databases (SQLAlchemy sync, Django ORM, raw psycopg2) and `async_login` for async databases (async SQLAlchemy, asyncpg, Tortoise ORM).
+It supports both **synchronous** and **asynchronous** user lookup use `login` for sync databases (SQLAlchemy sync, Django ORM, raw psycopg2) and `async_login` for async databases (async SQLAlchemy, asyncpg, Tortoise ORM).
 
 ### Setup
 
@@ -464,8 +464,8 @@ oauth = OAuthHandler(token_manager=tm, get_user=get_user)
 
 Your `get_user` function must return an object with two attributes:
 
-- `id` — the user's identifier, embedded in the token payload
-- `hashed_password` — the bcrypt hash stored at registration
+- `id` the user's identifier, embedded in the token payload
+- `hashed_password` the bcrypt hash stored at registration
 
 If your model uses different field names, add a property:
 
@@ -501,15 +501,15 @@ print(tokens)
 
 `login` does three things in order:
 
-1. Calls `get_user(username)` — raises `InvalidCredentialsError` if `None` is returned
-2. Calls `verify_password(password, user.hashed_password)` — raises `UnauthorizedError` if it returns `False`
-3. Calls `create_access_token` and `create_refresh_token` — raises `GuardError` if token creation fails
+1. Calls `get_user(username)` raises `InvalidCredentialsError` if `None` is returned
+2. Calls `verify_password(password, user.hashed_password)` raises `UnauthorizedError` if it returns `False`
+3. Calls `create_access_token` and `create_refresh_token` raises `GuardError` if token creation fails
 
 ---
 
 ### Async Login
 
-Use `async_login` when your `get_user` function is defined as `async def` — typically when using async SQLAlchemy, asyncpg, or any async ORM. It performs the exact same three steps as `login`, but awaits the `get_user` call.
+Use `async_login` when your `get_user` function is defined as `async def` typically when using async SQLAlchemy, asyncpg, or any async ORM. It performs the exact same three steps as `login`, but awaits the `get_user` call.
 
 ```python
 async def get_user(username: str):
@@ -529,13 +529,13 @@ print(tokens)
 # }
 ```
 
-> **Important:** Always match the method to your `get_user` type. Calling `async_login` with a sync `get_user` raises `TypeError` because you cannot `await` a plain value. Calling `login` with an async `get_user` returns a coroutine object instead of a user — authentication will silently fail. When in doubt, check whether your `get_user` is `async def`.
+> **Important:** Always match the method to your `get_user` type. Calling `async_login` with a sync `get_user` raises `TypeError` because you cannot `await` a plain value. Calling `login` with an async `get_user` returns a coroutine object instead of a user authentication will silently fail. When in doubt, check whether your `get_user` is `async def`.
 
 ---
 
 ### What to do with the tokens
 
-The access token goes back to the client in the response body. The refresh token should be set as an httpOnly cookie — it is invisible to JavaScript and therefore safe from XSS attacks:
+The access token goes back to the client in the response body. The refresh token should be set as an httpOnly cookie it is invisible to JavaScript and therefore safe from XSS attacks:
 
 ```python
 async def login_route(username, password, response):
@@ -554,29 +554,29 @@ async def login_route(username, password, response):
     return {"access_token": tokens["access_token"]}
 ```
 
-The client stores the access token in memory (a JavaScript variable — not `localStorage`) and attaches it to every protected request via the `Authorization` header:
+The client stores the access token in memory (a JavaScript variable not `localStorage`) and attaches it to every protected request via the `Authorization` header:
 
 ```
 Authorization: Bearer <access_token>
 ```
 
-The refresh token lives in the browser's httpOnly cookie store. The browser sends it automatically on requests to the refresh endpoint — the client never touches it directly.
+The refresh token lives in the browser's httpOnly cookie store. The browser sends it automatically on requests to the refresh endpoint the client never touches it directly.
 
 Client-side example:
 
 ```javascript
-// After login — store access token in memory only
+// After login store access token in memory only
 const { access_token } = await fetch("/login", {
     method: "POST",
     body: JSON.stringify({ username, password })
 }).then(r => r.json())
 
-// Every protected request — send access token in Authorization header
+// Every protected request send access token in Authorization header
 const profile = await fetch("/profile", {
     headers: { "Authorization": `Bearer ${access_token}` }
 }).then(r => r.json())
 
-// When access token expires — browser sends refresh cookie automatically
+// When access token expires browser sends refresh cookie automatically
 const refreshed = await fetch("/refresh", {
     method: "POST",
     credentials: "include"  // tells browser to send the httpOnly cookie
@@ -606,7 +606,7 @@ except GuardError:
 
 ## Protecting Routes
 
-`GateVault` wraps any function — sync or async — with token verification. The wrapped function never executes if the token is missing, expired, or invalid. On success, the decoded payload is injected as the `payload` keyword argument.
+`GateVault` wraps any function sync or async with token verification. The wrapped function never executes if the token is missing, expired, or invalid. On success, the decoded payload is injected as the `payload` keyword argument.
 
 `gate.protected` automatically detects whether the decorated function is a coroutine (`async def`) and applies the appropriate wrapper. You use the same decorator for both.
 
@@ -642,7 +642,7 @@ async def get_profile(payload=None):
     user_id = payload["user_id"]
     return await db.get_user(user_id)
 
-# await the call — gatevault detected async def and returns a coroutine
+# await the call gatevault detected async def and returns a coroutine
 result = await get_profile(token="eyJhbGci...")
 ```
 
@@ -762,7 +762,7 @@ from gatevault import (
 )
 ```
 
-### Catching broadly — one handler for everything
+### Catching broadly one handler for everything
 
 ```python
 try:
@@ -771,19 +771,19 @@ except GatevaultError as e:
     return {"error": str(e)}, 401
 ```
 
-### Catching specifically — different response per failure
+### Catching specifically different response per failure
 
 ```python
 try:
     payload = tm.decode_token(token)
 except TokenExpiredError:
-    # access token expired — tell client to use refresh token
+    # access token expired tell client to use refresh token
     return {"error": "token expired", "action": "refresh"}, 401
 except InvalidTokenError:
-    # signature mismatch — possible tampering, do not trust
+    # signature mismatch possible tampering, do not trust
     return {"error": "invalid token"}, 401
 except TokenDecodeError:
-    # token string is completely malformed — bad format
+    # token string is completely malformed bad format
     return {"error": "malformed token"}, 400
 ```
 
@@ -839,7 +839,7 @@ async def handle_protected_request(token: str):
 
 ### `ShortKeyWarning`
 
-Issued at `TokenManager` creation if the secret key is shorter than 32 bytes. HS256 requires at least 32 bytes per RFC 7518. This is a warning, not an error — your app will still run, but your tokens will be less secure.
+Issued at `TokenManager` creation if the secret key is shorter than 32 bytes. HS256 requires at least 32 bytes per RFC 7518. This is a warning, not an error your app will still run, but your tokens will be less secure.
 
 ```python
 import warnings
@@ -853,7 +853,7 @@ tm = TokenManager(secret_key="short", access_expiry_minutes=15, refresh_expiry_d
 ### Treating as an error in CI
 
 ```python
-# Catch misconfigurations early — fail the build if key is too short
+# Catch misconfigurations early fail the build if key is too short
 warnings.filterwarnings("error", category=ShortKeyWarning)
 ```
 
@@ -861,22 +861,22 @@ warnings.filterwarnings("error", category=ShortKeyWarning)
 
 ## Framework Integration
 
-gatevault is framework-agnostic. The same library works across FastAPI, Flask, and Django — you wire it into each framework's request/response cycle in the same way: initialize once at startup, define protected functions with `@gate.protected`, and pass the token from the `Authorization` header into the protected function at request time.
+gatevault is framework-agnostic. The same library works across FastAPI, Flask, and Django you wire it into each framework's request/response cycle in the same way: initialize once at startup, define protected functions with `@gate.protected`, and pass the token from the `Authorization` header into the protected function at request time.
 
 | Framework | Recommended login method | Async support |
 |---|---|---|
-| FastAPI + async SQLAlchemy | `async_login` | Full — use `async def` protected functions |
+| FastAPI + async SQLAlchemy | `async_login` | Full use `async def` protected functions |
 | FastAPI + sync DB | `login` | N/A |
 | Flask | `login` | Not applicable (Flask is sync) |
 | Django (sync ORM) | `login` | N/A |
-| Django 4.1+ async views | `async_login` | Full — use `async def` protected functions |
+| Django 4.1+ async views | `async_login` | Full use `async def` protected functions |
 | Django REST Framework | `login` | N/A |
 
 ---
 
 ### FastAPI (Async)
 
-The recommended FastAPI setup — uses `async_login`, `async def` protected functions, and async SQLAlchemy:
+The recommended FastAPI setup uses `async_login`, `async def` protected functions, and async SQLAlchemy:
 
 ```python
 import os
@@ -900,7 +900,7 @@ tm = TokenManager(
 gate = GateVault(token_manager=tm)
 
 
-# Protected functions — async, defined once, reused across routes
+# Protected functions async, defined once, reused across routes
 @gate.protected
 async def get_current_profile(payload=None):
     return await db.get_user(payload["user_id"])
@@ -920,7 +920,7 @@ async def register(body: UserCreate, db: AsyncSession = Depends(get_db)):
     return {"message": "registered"}
 
 
-# Login — async DB lookup requires async_login
+# Login async DB lookup requires async_login
 @app.post("/login")
 async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
@@ -948,7 +948,7 @@ async def login(
     return {"access_token": tokens["access_token"], "token_type": "bearer"}
 
 
-# Protected routes — extract token from header, pass to protected function
+# Protected routes extract token from header, pass to protected function
 @app.get("/profile")
 async def profile(authorization: str = Header(...)):
     token = authorization.replace("Bearer ", "")
@@ -984,7 +984,7 @@ async def refresh(response: Response, refresh_token: str = Cookie(...)):
     return {"access_token": new_access}
 
 
-# Logout — clear the refresh token cookie
+# Logout clear the refresh token cookie
 @app.post("/logout")
 def logout(response: Response, refresh_token: str = Cookie(None)):
     response.delete_cookie("refresh_token")
@@ -1140,7 +1140,7 @@ def logout():
 
 gatevault works with Django's sync ORM out of the box. Use `login` with a sync `get_user`. For async views (Django 4.1+), use `async_login` with an async `get_user`.
 
-#### Setup — `auth/gatevault_setup.py`
+#### Setup `auth/gatevault_setup.py`
 
 Create a dedicated setup file and import from it across your views. This avoids reinitializing gatevault objects on every request.
 
@@ -1168,7 +1168,7 @@ def get_user_from_db(username: str):
 oauth = OAuthHandler(token_manager=tm, get_user=get_user_from_db)
 ```
 
-#### Views — `auth/views.py`
+#### Views `auth/views.py`
 
 ```python
 import json
@@ -1184,7 +1184,7 @@ from .gatevault_setup import tm, oauth, gate
 from .models import User
 
 
-# Protected functions — defined once, called from any view
+# Protected functions defined once, called from any view
 @gate.protected
 def get_current_profile(payload=None):
     return User.objects.get(id=payload["user_id"])
@@ -1221,7 +1221,7 @@ def login(request):
     return response
 
 
-# Protected route — extract token from header, pass to protected function
+# Protected route extract token from header, pass to protected function
 @require_GET
 def profile(request):
     token = request.headers.get("Authorization", "").replace("Bearer ", "")
@@ -1234,7 +1234,7 @@ def profile(request):
         return JsonResponse({"error": "forbidden"}, status=403)
 
 
-# Token refresh — reads refresh token from httpOnly cookie
+# Token refresh reads refresh token from httpOnly cookie
 @csrf_exempt
 @require_POST
 def refresh(request):
@@ -1263,7 +1263,7 @@ def refresh(request):
     return response
 
 
-# Logout — clear the refresh token cookie
+# Logout clear the refresh token cookie
 @csrf_exempt
 @require_POST
 def logout(request):
@@ -1272,7 +1272,7 @@ def logout(request):
     return response
 ```
 
-#### URL configuration — `auth/urls.py`
+#### URL configuration `auth/urls.py`
 
 ```python
 from django.urls import path
@@ -1289,7 +1289,7 @@ urlpatterns = [
 
 #### Django REST Framework
 
-If you are using DRF, the same `gate.protected` functions work inside `APIView` or `@api_view` — extract the token from the `Authorization` header and pass it in:
+If you are using DRF, the same `gate.protected` functions work inside `APIView` or `@api_view` extract the token from the `Authorization` header and pass it in:
 
 ```python
 from rest_framework.decorators import api_view
@@ -1340,7 +1340,7 @@ class ProfileView(APIView):
 For async Django views, define an async `get_user` and use `async_login`:
 
 ```python
-# auth/gatevault_setup.py — async variant
+# auth/gatevault_setup.py async variant
 from django.contrib.auth import get_user_model
 
 async def get_user_async(username: str):
@@ -1354,7 +1354,7 @@ oauth_async = OAuthHandler(token_manager=tm, get_user=get_user_async)
 ```
 
 ```python
-# auth/views.py — async login view
+# auth/views.py async login view
 import json
 from django.http import JsonResponse
 from .gatevault_setup import oauth_async
@@ -1456,7 +1456,7 @@ except UnauthorizedError:
 
 ## Token Refresh & Rotation
 
-gatevault creates tokens on demand but does not manage storage or invalidation — that lives in your application. Without a refresh token store, a stolen refresh token is valid until it naturally expires, potentially days later.
+gatevault creates tokens on demand but does not manage storage or invalidation that lives in your application. Without a refresh token store, a stolen refresh token is valid until it naturally expires, potentially days later.
 
 ### Why you need a refresh token store
 
@@ -1494,7 +1494,7 @@ def rotate_tokens(refresh_token: str):
     if payload["type"] != "refresh":
         return {"error": "wrong token type"}, 400
 
-    # 3. Check for reuse — if already rotated, someone may have stolen it
+    # 3. Check for reuse if already rotated, someone may have stolen it
     if not db.is_refresh_token_valid(refresh_token):
         db.revoke_all_tokens_for_user(payload["user_id"])
         return {"error": "token reuse detected, please log in again"}, 401
@@ -1518,29 +1518,29 @@ def rotate_tokens(refresh_token: str):
 
 ### Secret key
 
-- Use at least 32 bytes — gatevault warns you if you don't
+- Use at least 32 bytes gatevault warns you if you don't
 - Generate with: `python -c "import secrets; print(secrets.token_hex(32))"`
-- Store in an environment variable — never hardcode in source
-- Rotating the key invalidates all existing tokens immediately — plan accordingly
+- Store in an environment variable never hardcode in source
+- Rotating the key invalidates all existing tokens immediately plan accordingly
 
 ### Token storage on the client
 
 | Token | Where to store | Why |
 |---|---|---|
 | Access token | Memory (JS variable) | Short-lived, wiped on tab close, never persisted |
-| Refresh token | httpOnly cookie | Invisible to JavaScript — safe from XSS |
+| Refresh token | httpOnly cookie | Invisible to JavaScript safe from XSS |
 
-Never store tokens in `localStorage` — any JavaScript running on the page, including injected scripts, can read it.
+Never store tokens in `localStorage` any JavaScript running on the page, including injected scripts, can read it.
 
 ### What not to put in the payload
 
 The JWT payload is base64 encoded, not encrypted. Anyone with the token string can decode and read it:
 
 ```python
-# Fine — identifiers and non-sensitive metadata
+# Fine identifiers and non-sensitive metadata
 tm.create_access_token(user_id=42, role="admin", org_id=7)
 
-# Never do this — readable by anyone
+# Never do this readable by anyone
 tm.create_access_token(user_id=42, email="john@example.com", password_hash="$2b$...")
 ```
 
@@ -1549,11 +1549,11 @@ tm.create_access_token(user_id=42, email="john@example.com", password_hash="$2b$
 Return the same error for "user not found" and "wrong password":
 
 ```python
-# Good — attacker learns nothing
+# Good attacker learns nothing
 except (InvalidCredentialsError, UnauthorizedError):
     return {"error": "invalid credentials"}, 401
 
-# Bad — confirms the username exists
+# Bad confirms the username exists
 except InvalidCredentialsError:
     return {"error": "user not found"}, 404
 ```
@@ -1629,19 +1629,19 @@ Returns `True` if match, `False` otherwise. Never raises on wrong password.
 
 **Framework-agnostic**
 
-Tying gatevault to FastAPI or Flask would limit who can use it. Auth logic — hashing, signing, verifying — has nothing to do with HTTP. Pure Python means it works anywhere Python runs.
+Tying gatevault to FastAPI or Flask would limit who can use it. Auth logic hashing, signing, verifying has nothing to do with HTTP. Pure Python means it works anywhere Python runs.
 
 **Both sync and async throughout**
 
-`async_login` and async-aware `gate.protected` were added to support async ORMs like async SQLAlchemy without requiring a separate library or workaround. The sync and async paths are intentionally separate in `OAuthHandler` — calling the wrong one for your `get_user` type fails loudly rather than silently misbehaving. `gate.protected` unifies both under one decorator by detecting the function type at decoration time.
+`async_login` and async-aware `gate.protected` were added to support async ORMs like async SQLAlchemy without requiring a separate library or workaround. The sync and async paths are intentionally separate in `OAuthHandler` calling the wrong one for your `get_user` type fails loudly rather than silently misbehaving. `gate.protected` unifies both under one decorator by detecting the function type at decoration time.
 
 **Class-based `TokenManager`**
 
-The secret key and expiry settings are configuration — they belong on an instance, not passed into every function call. Configure once at startup, share everywhere without threading arguments through every call.
+The secret key and expiry settings are configuration they belong on an instance, not passed into every function call. Configure once at startup, share everywhere without threading arguments through every call.
 
 **Shared `TokenManager` across `OAuthHandler` and `GateVault`**
 
-`OAuthHandler` creates tokens. `GateVault` verifies them. The shared `TokenManager` instance is the trust anchor — same secret key in, same secret key out.
+`OAuthHandler` creates tokens. `GateVault` verifies them. The shared `TokenManager` instance is the trust anchor same secret key in, same secret key out.
 
 **Payload injected as a keyword argument**
 
@@ -1659,9 +1659,9 @@ A wrong password is an expected outcome, not an exceptional one. The caller deci
 
 ## Known Limitations
 
-- Refresh token invalidation is not built in — you need a database or cache to track and revoke issued refresh tokens
-- Only HS256 (symmetric signing) is supported — RS256 (asymmetric keypair) is not yet available
-- No built-in rate limiting on login attempts — implement at the application or infrastructure level
+- Refresh token invalidation is not built in you need a database or cache to track and revoke issued refresh tokens
+- Only HS256 (symmetric signing) is supported RS256 (asymmetric keypair) is not yet available
+- No built-in rate limiting on login attempts implement at the application or infrastructure level
 
 ---
 
@@ -1689,7 +1689,7 @@ pytest tests/ -v
 
 ## License
 
-Apache 2.0 — see [LICENSE](./LICENSE) for details.
+Apache 2.0 see [LICENSE](./LICENSE) for details.
 
 ---
 **Built by Richard for the love of development.**
