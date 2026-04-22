@@ -11,7 +11,7 @@ jobs:
 
     permissions:
       id-token: write
-      contents: write   
+      contents: write
 
     steps:
       - name: Checkout code
@@ -33,7 +33,6 @@ jobs:
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
 
-
       # ---------------- RELEASE NOTES ----------------
       - name: Generate structured release notes
         id: notes
@@ -42,11 +41,13 @@ jobs:
           script: |
             const tag = context.ref.replace('refs/tags/', '');
 
-            const { data: commits } = await github.rest.repos.listCommits({
+            const commit = await github.rest.repos.getCommit({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              per_page: 100
+              ref: context.sha
             });
+
+            const msg = commit.data.commit.message.split('\n')[0];
 
             const groups = {
               feat: [],
@@ -55,36 +56,32 @@ jobs:
               other: []
             };
 
-            for (const commit of commits) {
-              const msg = commit.commit.message.split('\n')[0];
-
-              if (msg.startsWith('feat:')) {
-                groups.feat.push(msg.replace('feat:', '').trim());
-              } else if (msg.startsWith('fix:')) {
-                groups.fix.push(msg.replace('fix:', '').trim());
-              } else if (msg.startsWith('docs:')) {
-                groups.docs.push(msg.replace('docs:', '').trim());
-              } else {
-                groups.other.push(msg);
-              }
+            if (msg.startsWith('feat:')) {
+              groups.feat.push(msg.replace('feat:', '').trim());
+            } else if (msg.startsWith('fix:')) {
+              groups.fix.push(msg.replace('fix:', '').trim());
+            } else if (msg.startsWith('docs:')) {
+              groups.docs.push(msg.replace('docs:', '').trim());
+            } else {
+              groups.other.push(msg);
             }
 
             let body = `## 🚀 ${tag}\n\n`;
 
             if (groups.feat.length) {
-              body += `### ✨ Features\n${groups.feat.map(x => `- ${x}`).join('\n')}\n\n`;
+              body += `### ✨ Features\n- ${groups.feat[0]}\n\n`;
             }
 
             if (groups.fix.length) {
-              body += `### 🐛 Fixes\n${groups.fix.map(x => `- ${x}`).join('\n')}\n\n`;
+              body += `### 🐛 Fixes\n- ${groups.fix[0]}\n\n`;
             }
 
             if (groups.docs.length) {
-              body += `### 📚 Documentation\n${groups.docs.map(x => `- ${x}`).join('\n')}\n\n`;
+              body += `### 📚 Documentation\n- ${groups.docs[0]}\n\n`;
             }
 
             if (groups.other.length) {
-              body += `### 🔧 Other\n${groups.other.map(x => `- ${x}`).join('\n')}\n\n`;
+              body += `### 🔧 Other\n- ${groups.other[0]}\n\n`;
             }
 
             return body;
