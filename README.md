@@ -1,4 +1,4 @@
-# <img src="images/brown_logo.svg">
+# <img src="https://raw.githubusercontent.com/RichardOyelowo/gatevault/main/images/brown_logo.png">
 
 <p align="center">
   <a href="https://pypi.org/project/richard-gatevault/"><img src="https://img.shields.io/pypi/v/richard-gatevault?color=8B4513&label=pypi&style=flat-square"></a>
