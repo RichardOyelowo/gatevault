@@ -1,6 +1,6 @@
 from .guards import GateVault
 from .oauth2 import OAuthHandler
-from .tokens import TokenManager
+from .tokens import TokenManager, UserID, normalize_user_id
 from .warnings import ShortKeyWarning
 from .hashing import hash_password, verify_password
 from .exceptions import (
@@ -13,6 +13,8 @@ __all__ = [
     "GateVault",
     "OAuthHandler", 
     "TokenManager",
+    "UserID",
+    "normalize_user_id",
     "hash_password",
     "verify_password",
     "ShortKeyWarning",

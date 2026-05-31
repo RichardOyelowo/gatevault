@@ -2,7 +2,27 @@ import jwt
 import warnings
 from .warnings import ShortKeyWarning
 from datetime import datetime, timezone, timedelta
+from typing import Callable, Union
+from uuid import UUID
 from .exceptions import TokenExpiredError, InvalidTokenError, TokenDecodeError
+
+
+UserID = Union[int, str, UUID]
+EncodedUserID = Union[int, str]
+UserIDEncoder = Callable[[object], EncodedUserID]
+
+
+def normalize_user_id(user_id: UserID) -> EncodedUserID:
+    """Normalize supported user ID values before encoding a token."""
+    if isinstance(user_id, UUID):
+        return str(user_id)
+
+    if isinstance(user_id, (str, int)):
+        return user_id
+
+    raise TypeError(
+        f"user_id must be int, str, or UUID, got {type(user_id).__name__}"
+    )
 
 
 class TokenManager:
@@ -19,6 +39,8 @@ class TokenManager:
                                Typical values are 15–60 minutes.
         refresh_expiry_days: Lifetime of refresh tokens in days.
                              Typical values are 7–30 days.
+        user_id_encoder: Optional callable for apps that use a custom user ID
+                         type. It must return an int or str.
 
     Example::
 
@@ -32,10 +54,17 @@ class TokenManager:
         payload = tm.decode_token(access_token)
     """
 
-    def __init__(self, secret_key: str, access_expiry_minutes: int, refresh_expiry_days: int) -> None:
+    def __init__(
+        self,
+        secret_key: str,
+        access_expiry_minutes: int,
+        refresh_expiry_days: int,
+        user_id_encoder: UserIDEncoder = normalize_user_id,
+    ) -> None:
         self.secret_key = secret_key
         self.access_expiry = access_expiry_minutes
         self.refresh_expiry = refresh_expiry_days
+        self.user_id_encoder = user_id_encoder
 
         if len(secret_key.encode("utf-8")) < 32:
             warnings.warn(
@@ -44,7 +73,13 @@ class TokenManager:
                 ShortKeyWarning
             )
 
-    def _create_token(self, user_id: int, token_type: str, exp: timedelta, **kwargs) -> str:
+    def _create_token(
+        self,
+        user_id: UserID,
+        token_type: str,
+        exp: timedelta,
+        **kwargs
+    ) -> str:
         """Internal method for building and signing a JWT payload.
 
         Args:
@@ -56,22 +91,30 @@ class TokenManager:
         Returns:
             A signed JWT string.
         """
+        encoded_user_id = self.user_id_encoder(user_id)
+        if not isinstance(encoded_user_id, (str, int)):
+            raise TypeError(
+                "user_id_encoder must return int or str, "
+                f"got {type(encoded_user_id).__name__}"
+            )
+
         payload = {
-            "user_id": user_id,
+            "user_id": encoded_user_id,
             "exp": datetime.now(timezone.utc) + exp,
             "type": token_type,
             **kwargs
         }
         return jwt.encode(payload, self.secret_key, "HS256")
 
-    def create_access_token(self, user_id: int, **kwargs) -> str:
+    def create_access_token(self, user_id: UserID, **kwargs) -> str:
         """Create a signed short-lived JWT access token.
 
         Access tokens are intended to be sent with every authenticated request.
         They expire quickly to limit exposure if compromised.
 
         Args:
-            user_id: The ID of the user to encode in the token.
+            user_id: The ID of the user to encode in the token. Supports
+                     int, str, and UUID by default.
             **kwargs: Additional claims to include in the token payload
                       (e.g. ``role="admin"``).
 
@@ -82,9 +125,14 @@ class TokenManager:
 
             token = tm.create_access_token(user_id=42, role="admin")
         """
-        return self._create_token(user_id, "access", timedelta(minutes=self.access_expiry), **kwargs)
+        return self._create_token(
+            user_id,
+            "access",
+            timedelta(minutes=self.access_expiry),
+            **kwargs
+        )
 
-    def create_refresh_token(self, user_id: int, **kwargs) -> str:
+    def create_refresh_token(self, user_id: UserID, **kwargs) -> str:
         """Create a signed long-lived JWT refresh token.
 
         Refresh tokens are used only to obtain a new access token when the
@@ -92,7 +140,8 @@ class TokenManager:
         each use.
 
         Args:
-            user_id: The ID of the user to encode in the token.
+            user_id: The ID of the user to encode in the token. Supports
+                     int, str, and UUID by default.
             **kwargs: Additional claims to include in the token payload.
 
         Returns:
@@ -102,7 +151,12 @@ class TokenManager:
 
             token = tm.create_refresh_token(user_id=42)
         """
-        return self._create_token(user_id, "refresh", timedelta(days=self.refresh_expiry), **kwargs)
+        return self._create_token(
+            user_id,
+            "refresh",
+            timedelta(days=self.refresh_expiry),
+            **kwargs
+        )
 
     def decode_token(self, token: str) -> dict:
         """Decode and verify a JWT token.

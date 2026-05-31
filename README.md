@@ -363,6 +363,21 @@ access_token = tm.create_access_token(user_id=42)
 refresh_token = tm.create_refresh_token(user_id=42)
 ```
 
+`user_id` can be an `int`, `str`, or `UUID`. UUID values are stored in the token as strings because JWT claims are JSON.
+
+For custom ID objects, pass `user_id_encoder` when creating the manager:
+
+```python
+tm = TokenManager(
+    secret_key=os.environ["AUTH_SECRET_KEY"],
+    access_expiry_minutes=15,
+    refresh_expiry_days=7,
+    user_id_encoder=lambda user_id: str(user_id),
+)
+```
+
+The encoder must return an `int` or `str`. GateVault raises `TypeError` before token creation if the ID cannot be encoded safely.
+
 Access tokens are short-lived (minutes) sent with every authenticated request. Refresh tokens are long-lived (days) used only to obtain a new access token when the current one expires.
 
 ### Extra claims
@@ -1562,13 +1577,14 @@ except InvalidCredentialsError:
 
 ## API Reference
 
-### `TokenManager(secret_key, access_expiry_minutes, refresh_expiry_days)`
+### `TokenManager(secret_key, access_expiry_minutes, refresh_expiry_days, user_id_encoder=normalize_user_id)`
 
 | Parameter | Type | Description |
 |---|---|---|
 | `secret_key` | `str` | Secret for signing tokens. Minimum 32 bytes recommended. |
 | `access_expiry_minutes` | `int` | Access token lifetime in minutes. |
 | `refresh_expiry_days` | `int` | Refresh token lifetime in days. |
+| `user_id_encoder` | `callable` | Optional encoder for custom user ID types. Must return `int` or `str`. |
 
 | Method | Returns | Description |
 |---|---|---|
